@@ -155,7 +155,39 @@ def test_coordinate_from_name():
     assert fds.coordinate_from_name("SiOx_450K_scan") == 450
     assert fds.coordinate_from_name("run_300_a") == 300
     assert fds.coordinate_from_name("600K") == 600
+    # leading-zero temperature filenames (0025K.dm4 style)
+    assert fds.coordinate_from_name("0025K") == 25
+    assert fds.coordinate_from_name("0100K") == 100
+    assert fds.coordinate_from_name("1100K") == 1100
     assert np.isnan(fds.coordinate_from_name("nothing_here"))
+
+
+def test_from_directory_flat_files(tmp_path):
+    # flat layout: coordinate-named files directly in the folder
+    from fourdstem.io.writers import save_datacube_npz
+    for T in (25, 100, 300):
+        cube = fds.from_array(ring_pattern((48, 48)), q_per_px=0.02)
+        save_datacube_npz(str(tmp_path / f"{T:04d}K.npz"), cube)
+    series = fds.Series.from_directory(str(tmp_path), pattern="*.npz")
+    assert len(series) == 3
+    assert list(series.coordinates()) == [25.0, 100.0, 300.0]
+
+
+def test_from_directory_subfolders(tmp_path):
+    from fourdstem.io.writers import save_datacube_npz
+    for T in (300, 500):
+        d = tmp_path / f"{T}K"
+        d.mkdir()
+        cube = fds.from_array(ring_pattern((48, 48)), q_per_px=0.02)
+        save_datacube_npz(str(d / "scan.npz"), cube)
+    series = fds.Series.from_directory(str(tmp_path), pattern="*.npz")
+    assert len(series) == 2
+    assert list(series.coordinates()) == [300.0, 500.0]
+
+
+def test_from_directory_missing_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        fds.Series.from_directory(str(tmp_path), pattern="*.dm4")
 
 
 # -- preprocessing cleanup --------------------------------------------------

@@ -163,6 +163,38 @@ class Series:
         return cls(frames)
 
     @classmethod
+    def from_directory(cls, path, pattern="*.dm4", **kwargs):
+        """Auto-detect the layout and load a series from ``path``.
+
+        Handles the two common conventions without you having to pick:
+
+        * **flat files** — data files named by coordinate directly inside
+          ``path`` (e.g. ``0025K.dm4 … 1100K.dm4``) → dispatches to
+          :meth:`from_files` (coordinate parsed from each *file* name).
+        * **subfolders** — one subfolder per coordinate, each containing data
+          files (e.g. ``300K/scan.dm4``) → dispatches to :meth:`from_folders`
+          (coordinate parsed from each *folder* name).
+
+        Extra keyword arguments (``coord_regex``, ``preprocess``, ``reducer``,
+        ``roi``, ``q_unit_hint``) pass through to whichever loader is chosen.
+        """
+        direct = glob.glob(os.path.join(path, pattern))
+        if direct:
+            return cls.from_files(sorted(direct), **kwargs)
+        has_sub = any(
+            os.path.isdir(os.path.join(path, x)) and
+            glob.glob(os.path.join(path, x, pattern))
+            for x in os.listdir(path)
+        )
+        if has_sub:
+            return cls.from_folders(path, pattern=pattern, **kwargs)
+        raise FileNotFoundError(
+            f"no '{pattern}' files found in {path} — neither directly in the "
+            f"folder nor one level down in subfolders. Check the path and the "
+            f"file extension (pattern={pattern!r})."
+        )
+
+    @classmethod
     def from_cube(cls, cube, axis=0, coords=None, q_per_px=None):
         """Build a series by slicing a 3D/4D array or DataCube along ``axis``.
 
