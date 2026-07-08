@@ -230,7 +230,7 @@ def reduce_intensity(q, Iq, cfg: RDFConfig):
 # one-call pipeline
 # ---------------------------------------------------------------------------
 def pattern_to_rdf(pattern, q_per_px, cfg=None, center=None, mask=None,
-                   stopper_coords=None):
+                   stopper_coords=None, center_beam_radius=None):
     """Full pattern -> G(r) in one call.
 
     Parameters
@@ -246,6 +246,10 @@ def pattern_to_rdf(pattern, q_per_px, cfg=None, center=None, mask=None,
         Extra exclusion mask (e.g. Bragg spots). OR-combined with the stopper.
     stopper_coords : (x0,y0,x1,y1), optional
         Fixed beam-stopper box; if None the stopper is auto-detected.
+    center_beam_radius : float, optional
+        If given, exclude a central disk of this radius (px) around the beam
+        center — removes the intense direct/transmitted beam so it can't bias the
+        low-q intensity. A good starting value is ``q_int_min / q_per_px``.
 
     Returns
     -------
@@ -261,6 +265,10 @@ def pattern_to_rdf(pattern, q_per_px, cfg=None, center=None, mask=None,
         center, fried = find_center(pattern, full_mask)
     else:
         fried = float("nan")
+
+    if center_beam_radius:
+        from ..preprocess.masks import disk_mask
+        full_mask = full_mask | disk_mask(pattern.shape, center, center_beam_radius)
 
     H, W = pattern.shape
     cx, cy = center

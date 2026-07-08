@@ -170,6 +170,9 @@ native dtype에서 바로 누적합니다(`to_pattern`). 더 나아가 `lazy=Tru
 memmap으로 청크 평균을 내 파일을 통째로 RAM에 안 올립니다(`fds.mean_pattern_lazy`). 병렬 로딩은 동시에
 여러 파일을 여니 큰 파일에선 `n_jobs=4~8`이 안전합니다.
 
+**중심빔(직접빔) 제거**: `pattern_to_rdf(..., center_beam_radius=R)`로 중심 원판(반경 R px)을 제외해
+강한 직접빔이 저-q 강도를 왜곡하지 않게 합니다(beam stopper 막대는 자동 마스킹). 시작값은 `q_int_min/q_per_px` 정도.
+
 **q 캘리브레이션 주의**: 일부 DM(dm4)은 검출기 역격자 단위를 `1/nm`로 잘못 저장합니다(값은 사실 `1/Å`).
 그러면 q가 10배 작게 잡혀 reduction 구간과 안 맞습니다 — `load`/`from_directory`에 `q_unit_hint="1/A"`로
 강제하세요. 이 패키지는 `q = 1/d` 컨벤션이라 전자 PDF의 `q_int_max`는 보통 ~1.5 1/Å 수준입니다(12 아님).

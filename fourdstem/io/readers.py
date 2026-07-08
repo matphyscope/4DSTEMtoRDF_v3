@@ -123,6 +123,10 @@ def mean_pattern_lazy(path, q_unit_hint=None, reducer="mean", roi=None,
     try:
         from ncempy.io import dm
         fdm = dm.fileDM(path)
+        try:                                   # scale/scaleUnit come from the header
+            fdm.parseHeader()
+        except Exception:
+            pass
         try:
             mm = fdm.getMemmap(0)
         except Exception:
@@ -147,22 +151,56 @@ def mean_pattern_lazy(path, q_unit_hint=None, reducer="mean", roi=None,
                 count += block.shape[0]
         pattern = acc if reducer == "max" else acc / max(count, 1)
 
-        # calibration from the file header (detector = last dimension)
-        try:
-            scale = float(fdm.scale[0][-1])
-            unit = str(fdm.scaleUnit[0][-1])
-        except Exception:
-            scale, unit = 1.0, ""
+        # calibration from the header (no data load). ncempy stores per-dimension
+        # scale/scaleUnit lists; the detector axes carry a reciprocal unit.
+        scale, unit = _dm_detector_calibration(fdm)
+        if scale is None:
+            raise RuntimeError("no header calibration; fall back to full load")
         q_per_px, conv = unit_to_inv_angstrom(scale, unit, q_unit_hint)
         meta = {"reader": "ncempy-memmap", "unit": unit, "conv": conv,
                 "source": os.path.splitext(os.path.basename(path))[0]}
         return pattern, q_per_px, meta
     except Exception:
-        # robust fallback: full load then reduce (to_pattern is memory-safe)
+        # robust fallback: full load then reduce (to_pattern is memory-safe and
+        # gets the calibration right). Used if memmap or header calibration fails.
         from ..preprocess.transform import to_pattern
         cube = load(path, q_unit_hint)
         pat = cube.max_dp() if reducer == "max" else to_pattern(cube, roi)
         return pat, cube.calibration.q_per_px, cube.metadata
+
+
+def _dm_detector_calibration(fdm):
+    """Extract ``(scale, unit)`` of the detector (reciprocal) axis from a fileDM.
+
+    ncempy's ``scale``/``scaleUnit`` are per-dimension lists (possibly nested per
+    dataset) in the file's native order. The detector axes carry a reciprocal
+    unit (``1/nm``/``1/A``); we pick the first such dimension, else fall back to
+    the first axis. Returns ``(None, None)`` if nothing usable is found.
+    """
+    sc = getattr(fdm, "scale", None)
+    un = getattr(fdm, "scaleUnit", None)
+    if not sc or not un:
+        return None, None
+    if isinstance(sc[0], (list, tuple, np.ndarray)):   # nested per dataset
+        sc, un = list(sc[0]), list(un[0])
+    else:
+        sc, un = list(sc), list(un)
+    if not sc or len(sc) != len(un):
+        return None, None
+
+    def _is_recip(u):
+        u = str(u).strip().lower()
+        return ("1/" in u) or u in ("nm^-1", "a^-1", "å^-1", "nm-1")
+
+    recip = [i for i, u in enumerate(un) if _is_recip(u)]
+    idx = recip[0] if recip else 0
+    try:
+        scale = float(sc[idx])
+        if not np.isfinite(scale) or scale == 0:
+            return None, None
+        return scale, str(un[idx])
+    except Exception:
+        return None, None
 
 
 def from_array(data, q_per_px=None, r_per_px=None, name="array", metadata=None):

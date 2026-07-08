@@ -140,6 +140,20 @@ def test_reduce_intensity_raises_on_empty_window():
         fds.reduce_intensity(q, Iq, cfg)
 
 
+def test_pattern_to_rdf_center_beam_radius():
+    center = (64, 64)
+    img = ring_pattern((128, 128), center=center,
+                       rings=((30, 6, 1.0), (55, 6, 0.5)))
+    cfg = fds.RDFConfig(q_int_min=0.3, q_int_max=2.0, r_max=8.0)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = fds.pattern_to_rdf(img, 0.03, cfg, center=center,
+                                 center_beam_radius=8)
+    assert np.isfinite(res.N)
+    assert res.Gr.shape == res.r.shape
+
+
 def test_scattering_terms_positive():
     q = np.linspace(0.1, 10, 50)
     f_sq, f_avg_sq = fds.scattering_terms(q, {"Si": 1, "O": 2})
