@@ -36,6 +36,42 @@ fourdstem/
 
 ## 설치
 
+### 방법 A — conda 환경 새로 만들기 (권장)
+
+저장소 루트에서:
+
+```bash
+conda env create -f environment.yml   # 'fourdstem' 환경 생성 (+ editable 설치)
+conda activate fourdstem
+python -c "import fourdstem as fds; print(fds.__version__)"   # 확인
+```
+
+환경을 다시 만들려면(깨끗하게):
+
+```bash
+conda env remove -n fourdstem
+conda env create -f environment.yml
+```
+
+`environment.yml`을 수정한 뒤 반영:
+
+```bash
+conda env update -f environment.yml --prune
+```
+
+### 방법 B — conda 환경만 만들고 수동 설치
+
+```bash
+conda create -n fourdstem python=3.11 -y
+conda activate fourdstem
+conda install -c conda-forge numpy scipy scikit-learn matplotlib jupyterlab ncempy -y
+pip install -e .                       # fourdstem 패키지 (editable)
+# 선택: 대체 리더 / 정량 scattering factor
+# conda install -c conda-forge hyperspy abtem -y
+```
+
+### 방법 C — pip만 (extras 사용)
+
 ```bash
 pip install -e .              # 핵심(numpy, scipy)만
 pip install -e ".[all]"       # + sklearn, ncempy, hyperspy, abtem, matplotlib
@@ -43,6 +79,9 @@ pip install -e ".[all]"       # + sklearn, ncempy, hyperspy, abtem, matplotlib
 
 선택적 의존성 그룹: `ml`(NMF/PCA), `io`(dm4 읽기), `sf`(정량 scattering factor), `viz`(플롯).
 핵심은 numpy/scipy만으로 동작하고, 없는 기능은 필요할 때 친절한 안내를 띄웁니다.
+
+> **Jupyter에서 커널이 안 보이면**: `python -m ipykernel install --user --name fourdstem`
+> 실행 후 노트북에서 `fourdstem` 커널을 선택하세요.
 
 ## 빠른 시작
 

@@ -1,0 +1,26 @@
+# conda 환경 재현 파일
+#   생성:  conda env create -f environment.yml
+#   활성화: conda activate fourdstem
+#   갱신:  conda env update -f environment.yml --prune
+#
+# ncempy(dm4 리더)까지 포함한 권장 구성입니다. hyperspy(대체 리더)와
+# abtem(정량 scattering factor)은 무겁고 solver 충돌이 잦아 기본에서 빼두었습니다.
+# 필요하면 아래 주석을 해제하세요.
+name: fourdstem
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy>=1.21
+  - scipy>=1.7
+  - scikit-learn>=1.0
+  - matplotlib>=3.4
+  - jupyterlab
+  - ipykernel
+  - nbformat
+  - ncempy>=1.10          # .dm4 / .dm3 리더 (주 리더)
+  # - hyperspy>=1.7        # 대체 리더(.emd/.mib 등) — 필요시 해제
+  # - abtem>=1.0           # Kirkland 정량 scattering factor — 필요시 해제
+  - pip
+  - pip:
+      - -e .               # fourdstem 패키지를 editable 설치
