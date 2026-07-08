@@ -1,10 +1,16 @@
-"""Preprocessing: calibration, centering, masks, geometric transforms."""
+"""Preprocessing: calibration, centering, masks, geometric transforms, cleanup."""
 from .calibration import (
     q_per_px_from_ring,
     pixels_to_q,
     q_to_pixels,
     q_axis,
     max_q_for_center,
+)
+from .clean import (
+    remove_hot_pixels,
+    remove_dead_pixels,
+    median_denoise,
+    clean_pattern,
 )
 from .center import (
     center_of_mass,
@@ -31,6 +37,7 @@ from .transform import (
 __all__ = [
     "q_per_px_from_ring", "pixels_to_q", "q_to_pixels", "q_axis",
     "max_q_for_center",
+    "remove_hot_pixels", "remove_dead_pixels", "median_denoise", "clean_pattern",
     "center_of_mass", "friedel_correlation", "find_center_friedel", "find_center",
     "beam_stopper_mask", "bragg_peak_mask", "detect_bragg_peaks", "combine_masks",
     "disk_mask", "annular_mask", "wedge_mask",

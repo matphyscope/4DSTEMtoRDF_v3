@@ -44,6 +44,7 @@ from .io import (
 # -- preprocess -------------------------------------------------------------
 from .preprocess import (
     q_per_px_from_ring, pixels_to_q, q_to_pixels, q_axis, max_q_for_center,
+    remove_hot_pixels, remove_dead_pixels, median_denoise, clean_pattern,
     center_of_mass, friedel_correlation, find_center_friedel, find_center,
     beam_stopper_mask, bragg_peak_mask, detect_bragg_peaks, combine_masks,
     disk_mask, annular_mask, wedge_mask,
@@ -55,9 +56,11 @@ from .analysis import (
     azimuthal_integrate, azimuthal_variance,
     virtual_image, bright_field, annular_dark_field, center_of_mass_map,
     find_peaks_1d, refine_peak_parabolic, first_peak_position, peak_centroid,
-    DecompositionResult, nmf_decompose, pca_decompose, reconstruct,
+    fit_gaussian_peak,
+    DecompositionResult, ProfileDecomposition, nmf_decompose, pca_decompose,
+    decompose_profiles, reconstruct,
     RDFConfig, RDFResult, scattering_terms, damping_window, sine_ft,
-    reduce_intensity, pattern_to_rdf,
+    reduce_intensity, pattern_to_rdf, save_rdf, load_rdf,
 )
 
 # -- insitu -----------------------------------------------------------------
@@ -69,7 +72,7 @@ from .insitu import (
 # -- viz --------------------------------------------------------------------
 from .viz import (
     show_pattern, plot_profile, plot_rdf, plot_series_waterfall,
-    plot_components, plot_track,
+    plot_components, plot_track, plot_fractions,
 )
 
 __all__ = [
@@ -80,7 +83,8 @@ __all__ = [
     "save_datacube_npz", "load_datacube_npz",
     # preprocess
     "q_per_px_from_ring", "pixels_to_q", "q_to_pixels", "q_axis",
-    "max_q_for_center", "center_of_mass", "friedel_correlation",
+    "max_q_for_center", "remove_hot_pixels", "remove_dead_pixels",
+    "median_denoise", "clean_pattern", "center_of_mass", "friedel_correlation",
     "find_center_friedel", "find_center", "beam_stopper_mask", "bragg_peak_mask",
     "detect_bragg_peaks", "combine_masks", "disk_mask", "annular_mask",
     "wedge_mask", "to_pattern", "crop_detector", "bin_detector", "polar_transform",
@@ -88,13 +92,14 @@ __all__ = [
     "azimuthal_integrate", "azimuthal_variance", "virtual_image", "bright_field",
     "annular_dark_field", "center_of_mass_map", "find_peaks_1d",
     "refine_peak_parabolic", "first_peak_position", "peak_centroid",
-    "DecompositionResult", "nmf_decompose", "pca_decompose", "reconstruct",
+    "fit_gaussian_peak", "DecompositionResult", "ProfileDecomposition",
+    "nmf_decompose", "pca_decompose", "decompose_profiles", "reconstruct",
     "RDFConfig", "RDFResult", "scattering_terms", "damping_window", "sine_ft",
-    "reduce_intensity", "pattern_to_rdf",
+    "reduce_intensity", "pattern_to_rdf", "save_rdf", "load_rdf",
     # insitu
     "Series", "Frame", "coordinate_from_name", "track_peak",
     "track_multiple_peaks", "integrate_region",
     # viz
     "show_pattern", "plot_profile", "plot_rdf", "plot_series_waterfall",
-    "plot_components", "plot_track",
+    "plot_components", "plot_track", "plot_fractions",
 ]

@@ -111,6 +111,18 @@ peaks = fds.detect_bragg_peaks(cube.max_dp(), center=fds.find_center(mean, stopp
 `examples/` 폴더에 위 세 흐름을 그대로 실행 가능한 스크립트로 넣어 두었습니다:
 `single_dataset.py`, `insitu_series_rdf.py`, `nmf_bragg_separation.py`.
 
+## Jupyter 노트북 워크플로
+
+`notebooks/` 에 온도 시리즈 분석 2단계 워크플로가 있습니다(실데이터 없으면 합성 데모로 바로 실행됨):
+
+- **`01_preprocess_and_pdf.ipynb`** — 폴더(이름=온도) 불러오기 → 전처리 전/후(hot pixel·median·beam center) → PDF 변환 과정(I(q)→φ(q)→G(r)) → 온도별 `.npz` 저장
+- **`02_nmf_temperature_analysis.ipynb`** — `.npz` 불러오기 → G(r) 무지개 워터폴 → **NMF**(성분 2개, 수정 가능) → 성분별 온도 기여 → NMF 분율 vs 온도 → 1st peak(1.5–1.7 Å) 가우시안 피팅으로 위치 이동 측정
+
+노트북에 쓰이는 함수는 모두 패키지에 범용 함수로 들어 있습니다:
+`clean_pattern`/`remove_hot_pixels`(전처리), `Series.from_folders`(폴더=온도 로더),
+`decompose_profiles`(1D 프로파일 NMF/PCA + 분율), `fit_gaussian_peak`(가우시안 피팅),
+`plot_series_waterfall`/`plot_fractions`(시각화).
+
 ## 핵심 개념
 
 - **DataCube** — 2D(패턴 1장) / 3D(스택·시계열) / 4D(스캔) 을 동일한 인터페이스로 담는 컨테이너.

@@ -154,4 +154,57 @@ def test_series_from_cube_and_tracking():
 def test_coordinate_from_name():
     assert fds.coordinate_from_name("SiOx_450K_scan") == 450
     assert fds.coordinate_from_name("run_300_a") == 300
+    assert fds.coordinate_from_name("600K") == 600
     assert np.isnan(fds.coordinate_from_name("nothing_here"))
+
+
+# -- preprocessing cleanup --------------------------------------------------
+def test_remove_hot_pixels():
+    # realistic detector: smooth signal + read noise + a few bright spikes
+    rng = np.random.default_rng(0)
+    img = ring_pattern((64, 64), rings=((20, 6, 1.0),), central_beam=2.0)
+    img = img + 0.05 * rng.standard_normal(img.shape)
+    for (y, x) in [(30, 40), (12, 50), (55, 8)]:
+        img[y, x] += 5e3
+    cleaned, mask = fds.remove_hot_pixels(img, threshold=8, return_mask=True)
+    for (y, x) in [(30, 40), (12, 50), (55, 8)]:
+        assert mask[y, x]
+        assert cleaned[y, x] < 50          # replaced by local median
+    assert mask.sum() < 20                 # few false positives
+
+
+def test_remove_dead_pixels():
+    img = ring_pattern((48, 48), rings=((15, 4, 1.0),), central_beam=5) + 1.0
+    img[10, 10] = 0.0
+    cleaned, mask = fds.remove_dead_pixels(img, return_mask=True)
+    assert mask[10, 10]
+    assert cleaned[10, 10] > 0
+
+
+# -- Gaussian peak fit ------------------------------------------------------
+def test_fit_gaussian_peak_recovers_center():
+    x = np.linspace(1.0, 2.5, 300)
+    y = 3.0 * np.exp(-((x - 1.62) ** 2) / (2 * 0.05 ** 2)) + 0.2
+    fit = fds.fit_gaussian_peak(x, y, 1.5, 1.7)
+    assert fit["success"]
+    assert fit["center"] == pytest.approx(1.62, abs=0.01)
+    assert fit["sigma"] == pytest.approx(0.05, abs=0.01)
+
+
+# -- profile decomposition (needs sklearn) ---------------------------------
+def test_decompose_profiles_two_endmembers():
+    pytest.importorskip("sklearn")
+    r = np.linspace(0, 10, 200)
+    a = np.exp(-((r - 1.6) ** 2) / (2 * 0.1 ** 2))       # end-member A
+    b = np.exp(-((r - 2.6) ** 2) / (2 * 0.1 ** 2))       # end-member B
+    fracs_true = np.linspace(0, 1, 8)
+    X = np.vstack([(1 - t) * a + t * b for t in fracs_true])
+    res = fds.decompose_profiles(X, n_components=2, x=r)
+    assert res.components.shape == (2, 200)
+    assert res.weights.shape == (8, 2)
+    assert res.fractions.shape == (8, 2)
+    # each sample's fractions should sum to 1
+    assert np.allclose(res.fractions.sum(axis=1), 1.0, atol=1e-6)
+    # one component's fraction should trend monotonically with the true mix
+    trend = res.fractions[:, 0]
+    assert abs(np.corrcoef(fracs_true, trend)[0, 1]) > 0.95

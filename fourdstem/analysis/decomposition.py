@@ -155,6 +155,97 @@ def pca_decompose(cube, n_components=8, mask=None, whiten=False,
     )
 
 
+@dataclass
+class ProfileDecomposition:
+    """Decomposition of a stack of 1D profiles (e.g. G(r) vs temperature).
+
+    Attributes
+    ----------
+    components : ndarray, shape (k, n_features)
+        Basis profiles (rows of H). ``components[i]`` is a characteristic curve.
+    weights : ndarray, shape (n_samples, k)
+        How much of each component each sample contains (rows of W).
+    fractions : ndarray, shape (n_samples, k)
+        ``weights`` normalized so each sample's row sums to 1 — the "NMF fraction"
+        (e.g. amorphous vs crystalline abundance at each temperature).
+    x : ndarray or None
+        Shared feature axis (e.g. the r grid), if provided.
+    method : str
+    model : object
+    explained_variance_ratio : ndarray or None
+    """
+    components: np.ndarray
+    weights: np.ndarray
+    fractions: np.ndarray
+    x: np.ndarray | None = None
+    method: str = "nmf"
+    model: object = None
+    explained_variance_ratio: np.ndarray | None = None
+
+
+def decompose_profiles(profiles, n_components=2, method="nmf", x=None,
+                       normalize_fraction=True, random_state=0, **kwargs):
+    """Decompose a stack of 1D profiles into ``k`` components + per-sample weights.
+
+    This is the workhorse for an in-situ series: stack every temperature's G(r)
+    (or I(q), φ(q)) into a matrix ``X`` of shape ``(n_samples, n_features)`` and
+    factor ``X ≈ W · H``. With NMF and ``k=2`` you typically resolve two physical
+    end-members and get their fraction at each temperature.
+
+    Parameters
+    ----------
+    profiles : array (n_samples, n_features) or list of 1D arrays
+        The stacked profiles (must share length/feature axis).
+    n_components : int
+        Number of components ``k`` (start with 2; increase as needed).
+    method : {"nmf", "pca"}
+    x : array, optional
+        The shared feature axis (e.g. r grid) stored on the result for plotting.
+    normalize_fraction : bool
+        Compute ``fractions`` = weights normalized per sample to sum to 1.
+    random_state : int
+    **kwargs
+        Passed to the scikit-learn estimator.
+
+    Returns
+    -------
+    ProfileDecomposition
+    """
+    X = np.asarray(profiles, float)
+    if X.ndim != 2:
+        X = np.vstack([np.asarray(p, float).ravel() for p in profiles])
+
+    if method == "nmf":
+        from sklearn.decomposition import NMF
+        Xn = np.clip(np.nan_to_num(X, nan=0.0), 0, None)
+        model = NMF(n_components=n_components, init="nndsvda",
+                    random_state=random_state,
+                    max_iter=kwargs.pop("max_iter", 500), **kwargs)
+        W = model.fit_transform(Xn)
+        H = model.components_
+        evr = None
+    elif method == "pca":
+        from sklearn.decomposition import PCA
+        model = PCA(n_components=n_components, random_state=random_state, **kwargs)
+        W = model.fit_transform(np.nan_to_num(X, nan=0.0))
+        H = model.components_
+        evr = model.explained_variance_ratio_
+    else:
+        raise ValueError(f"unknown method {method!r}")
+
+    if normalize_fraction:
+        wsum = W.sum(axis=1, keepdims=True)
+        fractions = W / np.where(wsum == 0, 1.0, wsum)
+    else:
+        fractions = W.copy()
+
+    return ProfileDecomposition(
+        components=H, weights=W, fractions=fractions,
+        x=None if x is None else np.asarray(x, float),
+        method=method, model=model, explained_variance_ratio=evr,
+    )
+
+
 def reconstruct(result: DecompositionResult, dp_shape=None):
     """Reconstruct the approximate data matrix ``W @ H`` from a result.
 

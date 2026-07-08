@@ -61,8 +61,14 @@ def plot_rdf(result, ax=None, title=None):
 
 
 def plot_series_waterfall(profiles, coords, ax=None, offset=None,
-                          xlabel="r (Å)", cmap="viridis"):
-    """Stacked (waterfall) plot of per-frame profiles colored by coordinate."""
+                          xlabel="r (Å)", cmap="rainbow", labels=None,
+                          label_every=1, lw=1.0):
+    """Stacked (waterfall) plot of per-frame profiles colored by coordinate.
+
+    Curves are offset upward by ``offset`` (auto if None) so they don't overlap,
+    and colored along ``cmap`` (default rainbow) by their coordinate — ideal for
+    an in-situ temperature series of G(r).
+    """
     import matplotlib.pyplot as plt
 
     ax = _ax(ax)
@@ -72,12 +78,39 @@ def plot_series_waterfall(profiles, coords, ax=None, offset=None,
     cm = plt.get_cmap(cmap)
     if offset is None:
         amp = np.nanmax([np.nanmax(np.abs(y)) for _, y in profiles]) or 1.0
-        offset = 0.5 * amp
+        offset = 0.6 * amp
+    n = len(profiles)
     for i, ((x, y), c) in enumerate(zip(profiles, coords)):
-        color = cm(norm(c)) if (norm and np.isfinite(c)) else None
-        ax.plot(x, np.asarray(y) + i * offset, color=color, lw=1.0)
+        color = cm(norm(c)) if (norm and np.isfinite(c)) else cm(i / max(n - 1, 1))
+        lab = None
+        if labels is not None and (i % label_every == 0):
+            lab = labels[i]
+        ax.plot(x, np.asarray(y) + i * offset, color=color, lw=lw, label=lab)
     ax.set_xlabel(xlabel)
     ax.set_ylabel("stacked (offset by frame)")
+    if labels is not None:
+        ax.legend(fontsize=7, ncol=2)
+    return ax
+
+
+def plot_fractions(coords, fractions, ax=None, xlabel="temperature (K)",
+                   comp_labels=None, markers="o"):
+    """Plot per-sample component fractions vs. the series coordinate.
+
+    ``fractions`` is ``(n_samples, k)`` from
+    :func:`~fourdstem.analysis.decomposition.decompose_profiles`.
+    """
+    ax = _ax(ax)
+    coords = np.asarray(coords, float)
+    fractions = np.asarray(fractions, float)
+    k = fractions.shape[1]
+    order = np.argsort(coords)
+    for j in range(k):
+        lab = comp_labels[j] if comp_labels else f"component {j + 1}"
+        ax.plot(coords[order], fractions[order, j], marker=markers, label=lab)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("NMF fraction")
+    ax.legend()
     return ax
 
 

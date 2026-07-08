@@ -63,11 +63,12 @@ class Series:
     # -- construction -------------------------------------------------------
     @classmethod
     def from_files(cls, paths, q_unit_hint=None, roi=None,
-                   coord_regex=None, reducer="mean"):
+                   coord_regex=None, reducer="mean", preprocess=None):
         """Load each file, collapse to a mean pattern, wrap as a Frame.
 
         ``paths`` may be a glob string, a directory, or a list of paths.
         ``reducer`` in {"mean", "max"} controls how each cube collapses.
+        ``preprocess`` is an optional ``f(pattern) -> pattern`` cleanup hook.
         """
         from ..io.readers import load
         from ..preprocess.transform import to_pattern
@@ -80,6 +81,8 @@ class Series:
                 pat = cube.max_dp()
             else:
                 pat = to_pattern(cube, roi)
+            if preprocess is not None:
+                pat = preprocess(pat)
             name = os.path.splitext(os.path.basename(p))[0]
             frames.append(Frame(
                 pattern=pat,
@@ -88,6 +91,75 @@ class Series:
                 q_per_px=cube.calibration.q_per_px,
                 metadata={"source": p, **cube.metadata},
             ))
+        return cls(frames)
+
+    @classmethod
+    def from_folders(cls, root, coord_regex=None, roi=None, reducer="mean",
+                     q_unit_hint=None, preprocess=None, pattern="*.dm4"):
+        """Build a series from SUBFOLDERS whose *name* encodes the coordinate.
+
+        Layout expected (the common in-situ convention where each temperature is
+        its own folder)::
+
+            root/
+              300K/   scan1.dm4  scan2.dm4 ...
+              450K/   scan1.dm4 ...
+              600K/   ...
+
+        Each subfolder becomes one frame: its dm4(s) are loaded, collapsed to a
+        mean (or max) pattern, and averaged together if there are several. The
+        coordinate is parsed from the *folder* name (default: a temperature like
+        ``450K``; override with ``coord_regex``).
+
+        Parameters
+        ----------
+        root : str
+            Parent directory containing the per-temperature subfolders.
+        coord_regex : str, optional
+            Regex with one capture group for the numeric coordinate.
+        roi : tuple, optional
+            Scan ROI passed to ``to_pattern`` for 4D cubes.
+        reducer : {"mean", "max"}
+            How each cube collapses to a 2D pattern.
+        preprocess : callable, optional
+            ``f(pattern) -> pattern`` applied to each pattern before storing
+            (e.g. ``fourdstem.clean_pattern`` for hot/dead-pixel removal).
+        pattern : str
+            Glob for data files inside each subfolder.
+        """
+        import numpy as _np
+        from ..io.readers import load
+        from ..preprocess.transform import to_pattern
+
+        subdirs = sorted(
+            d for d in (os.path.join(root, x) for x in os.listdir(root))
+            if os.path.isdir(d)
+        )
+        frames = []
+        for d in subdirs:
+            files = sorted(glob.glob(os.path.join(d, pattern)))
+            if not files:
+                continue
+            pats, q_per_px = [], None
+            for p in files:
+                cube = load(p, q_unit_hint)
+                q_per_px = cube.calibration.q_per_px
+                pat = cube.max_dp() if reducer == "max" else to_pattern(cube, roi)
+                if preprocess is not None:
+                    pat = preprocess(pat)
+                pats.append(pat)
+            pat = pats[0] if len(pats) == 1 else _np.mean(pats, axis=0)
+            name = os.path.basename(d)
+            frames.append(Frame(
+                pattern=pat,
+                coord=coordinate_from_name(name, coord_regex),
+                label=name,
+                q_per_px=q_per_px,
+                metadata={"folder": d, "n_files": len(files)},
+            ))
+        if not frames:
+            raise FileNotFoundError(
+                f"no '{pattern}' files found in any subfolder of {root}")
         return cls(frames)
 
     @classmethod

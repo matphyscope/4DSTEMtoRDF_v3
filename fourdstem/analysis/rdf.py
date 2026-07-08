@@ -227,3 +227,30 @@ def pattern_to_rdf(pattern, q_per_px, cfg=None, center=None, mask=None,
     diag["friedel_corr"] = fried
     return RDFResult(q=q, Iq=Iq, q_reduced=qf, phi=phi, r=r, Gr=Gr,
                      N=diag["N"], center=(float(cx), float(cy)), diagnostics=diag)
+
+
+def save_rdf(path, result: RDFResult, **extra):
+    """Save an :class:`RDFResult` to a compressed .npz (with optional extras).
+
+    Stores the full pipeline (q, Iq, q_reduced, phi, r, Gr) plus scalars, so a
+    later notebook can reload the whole temperature series for NMF. Pass e.g.
+    ``temperature=450`` or ``source="scan.dm4"`` as extra fields.
+    """
+    from ..io.writers import save_result_npz
+
+    payload = dict(
+        q=result.q, Iq=result.Iq, q_reduced=result.q_reduced, phi=result.phi,
+        r=result.r, Gr=result.Gr, N=result.N,
+        center=np.array(result.center if result.center is not None
+                        else [np.nan, np.nan]),
+        friedel_corr=result.diagnostics.get("friedel_corr", np.nan),
+        sub_rmin_rms=result.diagnostics.get("sub_rmin_rms", np.nan),
+    )
+    payload.update(extra)
+    return save_result_npz(path, **payload)
+
+
+def load_rdf(path):
+    """Load an .npz written by :func:`save_rdf` into a plain dict of arrays."""
+    from ..io.writers import load_result_npz
+    return load_result_npz(path)

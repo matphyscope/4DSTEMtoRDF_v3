@@ -26,3 +26,4 @@ env/
 .DS_Store
 .vscode/
 .idea/
+*.egg-info/
