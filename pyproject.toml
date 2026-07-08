@@ -15,11 +15,14 @@ keywords = ["4D-STEM", "electron microscopy", "PDF", "RDF", "NMF", "diffraction"
 dependencies = [
     "numpy>=1.21",
     "scipy>=1.7",
+    "tqdm>=4.60",
 ]
 
 [project.optional-dependencies]
-# unsupervised decomposition (NMF/PCA)
+# unsupervised decomposition (NMF/PCA) — also provides joblib for parallelism
 ml = ["scikit-learn>=1.0"]
+# parallel batch processing (multi-core) without pulling all of scikit-learn
+parallel = ["joblib>=1.1", "tqdm>=4.60"]
 # reading Gatan .dm4/.dm3 and other microscope formats
 io = ["ncempy>=1.10", "hyperspy>=1.7"]
 # quantitative scattering factors for the RDF pipeline
@@ -29,6 +32,8 @@ viz = ["matplotlib>=3.4"]
 # everything
 all = [
     "scikit-learn>=1.0",
+    "joblib>=1.1",
+    "tqdm>=4.60",
     "ncempy>=1.10",
     "hyperspy>=1.7",
     "abtem>=1.0",

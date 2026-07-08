@@ -160,6 +160,11 @@ peaks = fds.detect_bragg_peaks(cube.max_dp(), center=fds.find_center(mean, stopp
 데이터 레이아웃은 두 가지 모두 자동 감지됩니다 — 폴더 안 평평한 파일(`0025K.dm4 … 1100K.dm4`,
 파일명=온도)이나 온도별 서브폴더(`300K/scan.dm4`) 어느 쪽이든 `Series.from_directory(경로)`로 로드됩니다.
 
+**멀티코어 + 진행바**: 로딩과 RDF 변환은 파일별로 독립적이라 병렬 처리됩니다.
+`from_directory(..., n_jobs=-1, progress=True)`, `series.map(func, n_jobs=-1, progress=True)`처럼
+`n_jobs`로 코어 수를 지정하고(`-1`=전체, 예: 32코어면 32개) 진행바를 켤 수 있습니다.
+범용 유틸 `fds.parallel_map(func, items, n_jobs, progress)`도 그대로 쓸 수 있습니다(joblib+tqdm, 없으면 순차 폴백).
+
 노트북에 쓰이는 함수는 모두 패키지에 범용 함수로 들어 있습니다:
 `clean_pattern`/`remove_hot_pixels`(전처리), `Series.from_directory`/`from_files`/`from_folders`(로더),
 `decompose_profiles`(1D 프로파일 NMF/PCA + 분율), `fit_gaussian_peak`(가우시안 피팅),

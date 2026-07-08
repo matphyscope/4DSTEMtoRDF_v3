@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import re
 import glob
+import functools
 from dataclasses import dataclass, field
 import numpy as np
 
@@ -36,6 +37,45 @@ class Frame:
     label: str = ""
     q_per_px: float | None = None
     metadata: dict = field(default_factory=dict)
+
+
+# -- module-level workers (picklable, so they run under joblib/loky) ---------
+def _load_file_frame(path, q_unit_hint=None, roi=None, coord_regex=None,
+                     reducer="mean", preprocess=None):
+    """Load one data file into a :class:`Frame` (coordinate from filename)."""
+    from ..io.readers import load
+    from ..preprocess.transform import to_pattern
+
+    cube = load(path, q_unit_hint)
+    pat = cube.max_dp() if reducer == "max" else to_pattern(cube, roi)
+    if preprocess is not None:
+        pat = preprocess(pat)
+    name = os.path.splitext(os.path.basename(path))[0]
+    return Frame(pattern=pat, coord=coordinate_from_name(name, coord_regex),
+                 label=name, q_per_px=cube.calibration.q_per_px,
+                 metadata={"source": path, **cube.metadata})
+
+
+def _load_folder_frame(folder, q_unit_hint=None, roi=None, coord_regex=None,
+                       reducer="mean", preprocess=None, pattern="*.dm4"):
+    """Load all data files in one subfolder, averaged, into a :class:`Frame`."""
+    from ..io.readers import load
+    from ..preprocess.transform import to_pattern
+
+    files = sorted(glob.glob(os.path.join(folder, pattern)))
+    pats, q_per_px = [], None
+    for p in files:
+        cube = load(p, q_unit_hint)
+        q_per_px = cube.calibration.q_per_px
+        pat = cube.max_dp() if reducer == "max" else to_pattern(cube, roi)
+        if preprocess is not None:
+            pat = preprocess(pat)
+        pats.append(pat)
+    pat = pats[0] if len(pats) == 1 else np.mean(pats, axis=0)
+    name = os.path.basename(folder)
+    return Frame(pattern=pat, coord=coordinate_from_name(name, coord_regex),
+                 label=name, q_per_px=q_per_px,
+                 metadata={"folder": folder, "n_files": len(files)})
 
 
 def coordinate_from_name(name, pattern=None):
@@ -62,40 +102,30 @@ class Series:
 
     # -- construction -------------------------------------------------------
     @classmethod
-    def from_files(cls, paths, q_unit_hint=None, roi=None,
-                   coord_regex=None, reducer="mean", preprocess=None):
+    def from_files(cls, paths, q_unit_hint=None, roi=None, coord_regex=None,
+                   reducer="mean", preprocess=None, n_jobs=1, progress=True):
         """Load each file, collapse to a mean pattern, wrap as a Frame.
 
         ``paths`` may be a glob string, a directory, or a list of paths.
         ``reducer`` in {"mean", "max"} controls how each cube collapses.
         ``preprocess`` is an optional ``f(pattern) -> pattern`` cleanup hook.
+        ``n_jobs`` parallelizes loading across processes (``-1`` = all cores);
+        ``progress`` shows a live bar.
         """
-        from ..io.readers import load
-        from ..preprocess.transform import to_pattern
+        from ..utils.parallel import parallel_map
 
         paths = cls._resolve_paths(paths)
-        frames = []
-        for p in paths:
-            cube = load(p, q_unit_hint)
-            if reducer == "max":
-                pat = cube.max_dp()
-            else:
-                pat = to_pattern(cube, roi)
-            if preprocess is not None:
-                pat = preprocess(pat)
-            name = os.path.splitext(os.path.basename(p))[0]
-            frames.append(Frame(
-                pattern=pat,
-                coord=coordinate_from_name(name, coord_regex),
-                label=name,
-                q_per_px=cube.calibration.q_per_px,
-                metadata={"source": p, **cube.metadata},
-            ))
+        worker = functools.partial(_load_file_frame, q_unit_hint=q_unit_hint,
+                                   roi=roi, coord_regex=coord_regex,
+                                   reducer=reducer, preprocess=preprocess)
+        frames = parallel_map(worker, paths, n_jobs=n_jobs, progress=progress,
+                              desc="loading files")
         return cls(frames)
 
     @classmethod
     def from_folders(cls, root, coord_regex=None, roi=None, reducer="mean",
-                     q_unit_hint=None, preprocess=None, pattern="*.dm4"):
+                     q_unit_hint=None, preprocess=None, pattern="*.dm4",
+                     n_jobs=1, progress=True):
         """Build a series from SUBFOLDERS whose *name* encodes the coordinate.
 
         Layout expected (the common in-situ convention where each temperature is
@@ -109,57 +139,24 @@ class Series:
         Each subfolder becomes one frame: its dm4(s) are loaded, collapsed to a
         mean (or max) pattern, and averaged together if there are several. The
         coordinate is parsed from the *folder* name (default: a temperature like
-        ``450K``; override with ``coord_regex``).
-
-        Parameters
-        ----------
-        root : str
-            Parent directory containing the per-temperature subfolders.
-        coord_regex : str, optional
-            Regex with one capture group for the numeric coordinate.
-        roi : tuple, optional
-            Scan ROI passed to ``to_pattern`` for 4D cubes.
-        reducer : {"mean", "max"}
-            How each cube collapses to a 2D pattern.
-        preprocess : callable, optional
-            ``f(pattern) -> pattern`` applied to each pattern before storing
-            (e.g. ``fourdstem.clean_pattern`` for hot/dead-pixel removal).
-        pattern : str
-            Glob for data files inside each subfolder.
+        ``450K``; override with ``coord_regex``). ``n_jobs`` parallelizes across
+        subfolders; ``progress`` shows a live bar.
         """
-        import numpy as _np
-        from ..io.readers import load
-        from ..preprocess.transform import to_pattern
+        from ..utils.parallel import parallel_map
 
         subdirs = sorted(
             d for d in (os.path.join(root, x) for x in os.listdir(root))
-            if os.path.isdir(d)
+            if os.path.isdir(d) and glob.glob(os.path.join(d, pattern))
         )
-        frames = []
-        for d in subdirs:
-            files = sorted(glob.glob(os.path.join(d, pattern)))
-            if not files:
-                continue
-            pats, q_per_px = [], None
-            for p in files:
-                cube = load(p, q_unit_hint)
-                q_per_px = cube.calibration.q_per_px
-                pat = cube.max_dp() if reducer == "max" else to_pattern(cube, roi)
-                if preprocess is not None:
-                    pat = preprocess(pat)
-                pats.append(pat)
-            pat = pats[0] if len(pats) == 1 else _np.mean(pats, axis=0)
-            name = os.path.basename(d)
-            frames.append(Frame(
-                pattern=pat,
-                coord=coordinate_from_name(name, coord_regex),
-                label=name,
-                q_per_px=q_per_px,
-                metadata={"folder": d, "n_files": len(files)},
-            ))
-        if not frames:
+        if not subdirs:
             raise FileNotFoundError(
                 f"no '{pattern}' files found in any subfolder of {root}")
+        worker = functools.partial(_load_folder_frame, q_unit_hint=q_unit_hint,
+                                   roi=roi, coord_regex=coord_regex,
+                                   reducer=reducer, preprocess=preprocess,
+                                   pattern=pattern)
+        frames = parallel_map(worker, subdirs, n_jobs=n_jobs, progress=progress,
+                              desc="loading folders")
         return cls(frames)
 
     @classmethod
@@ -265,6 +262,15 @@ class Series:
             raise ValueError(f"frames have differing pattern shapes: {shapes}")
         return np.stack([f.pattern for f in self.frames], 0)
 
-    def map(self, func):
-        """Apply ``func(frame)`` to every frame, returning the list of results."""
-        return [func(f) for f in self.frames]
+    def map(self, func, n_jobs=1, progress=True, desc="frames"):
+        """Apply ``func(frame)`` to every frame, returning the list of results.
+
+        ``n_jobs`` parallelizes across processes (``-1`` = all cores, or a count
+        like ``32``); ``progress`` shows a live bar. Results stay in series order.
+        With ``n_jobs != 1`` the results are returned but any per-frame side
+        effects (e.g. saving files) run inside worker processes — prefer
+        returning data and saving in the main process for deterministic order.
+        """
+        from ..utils.parallel import parallel_map
+        return parallel_map(func, self.frames, n_jobs=n_jobs, progress=progress,
+                            desc=desc)

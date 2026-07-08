@@ -190,6 +190,33 @@ def test_from_directory_missing_raises(tmp_path):
         fds.Series.from_directory(str(tmp_path), pattern="*.dm4")
 
 
+# -- parallel / progress ----------------------------------------------------
+def test_parallel_map_sequential_equals_parallel():
+    def sq(x):
+        return x * x
+    items = list(range(10))
+    seq = fds.parallel_map(sq, items, n_jobs=1, progress=False)
+    assert seq == [x * x for x in items]
+    par = fds.parallel_map(sq, items, n_jobs=2, progress=False)
+    assert par == seq                      # order preserved
+
+
+def test_parallel_map_lambda_closure():
+    # loky/cloudpickle must handle a closure over a captured variable
+    k = 3
+    out = fds.parallel_map(lambda x: x + k, [1, 2, 3], n_jobs=2, progress=False)
+    assert out == [4, 5, 6]
+
+
+def test_series_map_parallel_matches_sequential():
+    stack = np.stack([ring_pattern((48, 48), rings=((r, 5, 1.0),))
+                      for r in (15, 20, 25, 30)], 0)
+    series = fds.Series.from_cube(stack, coords=np.arange(4) * 100.0, q_per_px=1.0)
+    seq = series.map(lambda f: float(f.pattern.sum()), n_jobs=1, progress=False)
+    par = series.map(lambda f: float(f.pattern.sum()), n_jobs=2, progress=False)
+    assert np.allclose(seq, par)
+
+
 # -- preprocessing cleanup --------------------------------------------------
 def test_remove_hot_pixels():
     # realistic detector: smooth signal + read noise + a few bright spikes

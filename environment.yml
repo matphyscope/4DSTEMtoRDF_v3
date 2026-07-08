@@ -18,6 +18,8 @@ dependencies:
   - jupyterlab
   - ipykernel
   - nbformat
+  - tqdm>=4.60            # 진행바
+  - joblib>=1.1           # 멀티코어 병렬 처리
   - ncempy>=1.10          # .dm4 / .dm3 리더 (주 리더)
   # - hyperspy>=1.7        # 대체 리더(.emd/.mib 등) — 필요시 해제
   # - abtem>=1.0           # Kirkland 정량 scattering factor — 필요시 해제

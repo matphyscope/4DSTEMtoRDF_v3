@@ -75,6 +75,9 @@ from .viz import (
     plot_components, plot_track, plot_fractions,
 )
 
+# -- utils ------------------------------------------------------------------
+from .utils import parallel_map, progress_iter
+
 __all__ = [
     "__version__",
     # io
@@ -102,4 +105,6 @@ __all__ = [
     # viz
     "show_pattern", "plot_profile", "plot_rdf", "plot_series_waterfall",
     "plot_components", "plot_track", "plot_fractions",
+    # utils
+    "parallel_map", "progress_iter",
 ]

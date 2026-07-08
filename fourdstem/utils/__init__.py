@@ -7,6 +7,7 @@ from .helpers import (
     angular_coordinate,
     moving_average,
 )
+from .parallel import parallel_map, progress_iter
 
 __all__ = [
     "trapezoid",
@@ -15,4 +16,6 @@ __all__ = [
     "radial_coordinate",
     "angular_coordinate",
     "moving_average",
+    "parallel_map",
+    "progress_iter",
 ]
