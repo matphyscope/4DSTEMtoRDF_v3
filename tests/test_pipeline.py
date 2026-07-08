@@ -105,6 +105,15 @@ def test_pattern_to_rdf_runs():
     assert res.center is not None
 
 
+def test_reduce_intensity_raises_on_empty_window():
+    # q only spans 0..0.15 but the window wants 0.8..12 -> must fail loudly
+    q = np.linspace(0.0, 0.15, 120)
+    Iq = np.exp(-q / 0.03)
+    cfg = fds.RDFConfig(q_int_min=0.8, q_int_max=12.0)
+    with pytest.raises(ValueError, match="q-calibration|too few"):
+        fds.reduce_intensity(q, Iq, cfg)
+
+
 def test_scattering_terms_positive():
     q = np.linspace(0.1, 10, 50)
     f_sq, f_avg_sq = fds.scattering_terms(q, {"Si": 1, "O": 2})

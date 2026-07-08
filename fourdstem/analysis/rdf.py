@@ -155,6 +155,19 @@ def reduce_intensity(q, Iq, cfg: RDFConfig):
     from scipy.optimize import minimize_scalar
 
     m = np.isfinite(Iq) & (q >= cfg.q_int_min) & (q <= cfg.q_int_max)
+    if m.sum() < 5:
+        q_lo = float(np.nanmin(q)) if q.size else float("nan")
+        q_hi = float(np.nanmax(q)) if q.size else float("nan")
+        raise ValueError(
+            "reduction window selects too few points "
+            f"({int(m.sum())}). The FT window is "
+            f"q_int_min={cfg.q_int_min}, q_int_max={cfg.q_int_max} (1/A) but the "
+            f"data only spans q = {q_lo:.4g} .. {q_hi:.4g} 1/A. This almost always "
+            "means the q-calibration (q_per_px) is wrong or in the wrong unit. "
+            "Check q_per_px against a known ring (see calibration helpers), pass a "
+            "q_unit_hint when loading, or set q_int_min/q_int_max to match your q "
+            "range."
+        )
     qf, If = q[m], Iq[m]
     f_sq, f_avg_sq = scattering_terms(qf, cfg.composition)
     r = np.arange(0.0, cfg.r_max, cfg.dr)
