@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# data / outputs
+*.dm4
+*.dm3
+*.emd
+*.mib
+rdf_npz/
+*_summary.npz
+series_rdf_summary.npz
+
+# envs
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

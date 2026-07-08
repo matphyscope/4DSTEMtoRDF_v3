@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fourdstem"
+version = "0.1.0"
+description = "General-purpose 4D-STEM processing and analysis (RDF/PDF, virtual imaging, NMF/PCA, Bragg masking, in-situ series)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Jonghoon K." }]
+keywords = ["4D-STEM", "electron microscopy", "PDF", "RDF", "NMF", "diffraction"]
+
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.7",
+]
+
+[project.optional-dependencies]
+# unsupervised decomposition (NMF/PCA)
+ml = ["scikit-learn>=1.0"]
+# reading Gatan .dm4/.dm3 and other microscope formats
+io = ["ncempy>=1.10", "hyperspy>=1.7"]
+# quantitative scattering factors for the RDF pipeline
+sf = ["abtem>=1.0"]
+# plotting
+viz = ["matplotlib>=3.4"]
+# everything
+all = [
+    "scikit-learn>=1.0",
+    "ncempy>=1.10",
+    "hyperspy>=1.7",
+    "abtem>=1.0",
+    "matplotlib>=3.4",
+]
+dev = ["pytest>=7.0"]
+
+[project.urls]
+Repository = "https://github.com/matphyscope/4dstemtordf_v3"
+
+[tool.setuptools.packages.find]
+include = ["fourdstem*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
