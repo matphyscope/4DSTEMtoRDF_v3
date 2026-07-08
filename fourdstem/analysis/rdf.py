@@ -68,46 +68,78 @@ class RDFResult:
 _Z = {"H": 1, "C": 6, "N": 7, "O": 8, "Si": 14, "Al": 13, "Au": 79,
       "Ti": 22, "Fe": 26, "Cu": 29, "Ge": 32}
 _warned_sf = [False]
+_SF_CACHE = [None]
+_BUNDLED_KIRKLAND = os.path.join(os.path.dirname(__file__), "data", "kirkland.json")
 
 
 def _kirkland_params():
-    import abtem
-    base = os.path.dirname(abtem.__file__)
-    for root, _, files in os.walk(base):
-        if "kirkland.json" in files:
-            with open(os.path.join(root, "kirkland.json")) as fh:
-                return json.load(fh)
-    raise FileNotFoundError("kirkland.json not found in abtem")
+    """Load the Kirkland parameter table.
+
+    Prefers the table bundled with fourdstem (so no external dependency is
+    needed); falls back to abTEM's copy if a symbol is missing. Both use the
+    ``[[a1,a2,a3],[b1,b2,b3],[c1,c2,c3],[d1,d2,d3]]`` layout.
+    """
+    if _SF_CACHE[0] is not None:
+        return _SF_CACHE[0]
+    tbl = {}
+    try:
+        with open(_BUNDLED_KIRKLAND) as fh:
+            tbl = {k: v for k, v in json.load(fh).items() if not k.startswith("_")}
+    except Exception:
+        tbl = {}
+    try:                                    # merge abTEM's table if available
+        import abtem
+        base = os.path.dirname(abtem.__file__)
+        for root, _, files in os.walk(base):
+            if "kirkland.json" in files:
+                with open(os.path.join(root, "kirkland.json")) as fh:
+                    for k, v in json.load(fh).items():
+                        tbl.setdefault(k, v)
+                break
+    except Exception:
+        pass
+    if not tbl:
+        raise FileNotFoundError("no Kirkland parameter table available")
+    _SF_CACHE[0] = tbl
+    return tbl
 
 
 def _f_kirkland(q, p):
-    # 12-coefficient Kirkland form; verify the coefficient order in your json.
-    a1, b1, a2, b2, a3, b3, c1, d1, c2, d2, c3, d3 = p
+    """Kirkland electron scattering factor from ``p = [[a],[b],[c],[d]]`` (len-3 each).
+
+    f_e(q) = Σ a_i/(q²+b_i) + Σ c_i·exp(-d_i·q²),  q = 1/d in 1/Å.
+    """
+    a, b, c, d = p
     q2 = q * q
-    return (a1 / (q2 + b1) + a2 / (q2 + b2) + a3 / (q2 + b3)
-            + c1 * np.exp(-d1 * q2) + c2 * np.exp(-d2 * q2) + c3 * np.exp(-d3 * q2))
+    f = np.zeros_like(q, dtype=float)
+    for i in range(3):
+        f = f + a[i] / (q2 + b[i])
+    for i in range(3):
+        f = f + c[i] * np.exp(-d[i] * q2)
+    return f
 
 
 def scattering_terms(q, composition):
     """Return ``(<f²>, <f>²)`` for a composition, weighted by atomic fraction."""
     try:
         tbl = _kirkland_params()
+        missing = [s for s in composition if s not in tbl]
+        if missing:
+            raise KeyError(f"no Kirkland params for {missing}")
 
         def fe(sym):
-            key = sym if sym in tbl else str(_Z.get(sym, sym))
-            return _f_kirkland(q, tbl[key])
-    except Exception:
+            return _f_kirkland(q, tbl[sym])
+    except Exception as e:
         if not _warned_sf[0]:
             warnings.warn(
-                "abTEM/kirkland.json unavailable — using CRUDE analytic f(q). "
-                "Peak positions OK; amplitudes NOT quantitative. Install abtem "
-                "or supply real scattering factors for production."
+                f"Kirkland scattering factors unavailable ({e}) — using a CRUDE "
+                "analytic f(q). Peak positions OK; amplitudes NOT quantitative."
             )
             _warned_sf[0] = True
 
-        def fe(sym):
+        def fe(sym):                        # gentle Mott-like decay (approximate)
             Z = _Z.get(sym, 8)
-            return Z * np.exp(-1.5 * q * q) + 0.02 * Z
+            return Z / (1.0 + (q / 0.3) ** 2) + 0.1 * Z * np.exp(-2.0 * q * q)
 
     syms = list(composition)
     c = np.array([composition[s] for s in syms], float)

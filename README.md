@@ -198,5 +198,5 @@ pytest -q          # 합성 데이터로 전체 파이프라인 검증 (실제 .
 ## 유의사항 (⚑)
 
 - **q 단위**: dm4 메타데이터가 1/nm 또는 1/Å이면 자동 변환, 그 외엔 경고 후 원값 사용 — 알려진 링으로 검증하세요.
-- **Scattering factor**: `abtem`의 `kirkland.json`을 쓰며, 없으면 조잡한 해석식으로 대체됩니다(peak 위치는 유효, 절대 진폭은 부정확). 정량 분석 시 실제 산란인자를 넣으세요.
+- **Scattering factor**: Kirkland 전자 산란인자 표(H, C, N, O, Al, Si, P, Ca, Ti, Fe, Cu, Zn, Ge, Zr, Ag, Au)가 **패키지에 내장**되어 있어 `abtem` 없이도 정량적으로 동작합니다. 표에 없는 원소는 `abtem`이 있으면 그걸 쓰고, 둘 다 없으면 근사식으로 대체(경고)합니다. `[[a],[b],[c],[d]]` 형식(`fourdstem/analysis/data/kirkland.json`)이라 원소 추가가 쉽습니다.
 - **SiOx 조성**은 가정값이므로 절대 배위수보다 **peak 위치·상대 변화**를 신뢰하세요.

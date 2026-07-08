@@ -47,5 +47,8 @@ Repository = "https://github.com/matphyscope/4dstemtordf_v3"
 [tool.setuptools.packages.find]
 include = ["fourdstem*"]
 
+[tool.setuptools.package-data]
+fourdstem = ["analysis/data/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

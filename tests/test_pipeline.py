@@ -146,6 +146,36 @@ def test_scattering_terms_positive():
     assert np.all(f_sq > 0) and np.all(f_avg_sq > 0)
 
 
+def test_bundled_kirkland_factors_sane():
+    # bundled table must load (no crude-fallback warning) and give physical f(0)
+    from fourdstem.analysis.rdf import _kirkland_params, _f_kirkland
+    tbl = _kirkland_params()
+    for s in ("H", "O", "Si", "Au"):
+        assert s in tbl
+    f0 = {s: float(_f_kirkland(np.array([0.0]), tbl[s])[0])
+          for s in ("H", "O", "Si", "Au")}
+    # electron scattering factor at q=0 grows with Z
+    assert f0["H"] < f0["O"] < f0["Si"] < f0["Au"]
+    # scattering_terms must not fall back to the crude form for Si/O
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fds.scattering_terms(np.linspace(0.1, 1.5, 20), {"Si": 1, "O": 2})
+
+
+def test_reduction_phi_bounded_with_real_factors():
+    # regression: with correct Kirkland factors, phi must not ramp away at high q
+    q = np.linspace(0.05, 1.6, 400)
+    f_sq, f_avg_sq = fds.scattering_terms(q, {"Si": 1, "O": 2})
+    struct = 0.35 * np.sin(2 * np.pi * q / 0.24) * np.exp(-0.8 * q)
+    Iq = 120.0 * (f_sq + f_avg_sq * struct)
+    cfg = fds.RDFConfig(composition={"Si": 1, "O": 2}, q_int_min=0.15,
+                        q_int_max=1.5, r_min=1.1, r_max=8.0)
+    qf, phi, r, Gr, diag = fds.reduce_intensity(q, Iq, cfg)
+    assert diag["N"] == pytest.approx(120.0, rel=0.1)
+    assert np.abs(phi).max() < 1.0          # bounded, not ramping to +2.4
+
+
 # -- decomposition (needs sklearn) -----------------------------------------
 def test_nmf_separates_amorphous_and_crystalline():
     pytest.importorskip("sklearn")
