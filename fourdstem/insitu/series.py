@@ -40,34 +40,42 @@ class Frame:
 
 
 # -- module-level workers (picklable, so they run under joblib/loky) ---------
-def _load_file_frame(path, q_unit_hint=None, roi=None, coord_regex=None,
-                     reducer="mean", preprocess=None):
-    """Load one data file into a :class:`Frame` (coordinate from filename)."""
-    from ..io.readers import load
+def _reduce_one(path, q_unit_hint, roi, reducer, lazy):
+    """Reduce a single file to ``(pattern2d, q_per_px, meta)``.
+
+    ``lazy=True`` memory-maps the file and averages in chunks (for big 4D cubes);
+    otherwise the file is loaded fully then reduced (memory-safe mean).
+    """
+    from ..io.readers import load, mean_pattern_lazy
     from ..preprocess.transform import to_pattern
 
+    if lazy:
+        return mean_pattern_lazy(path, q_unit_hint, reducer=reducer, roi=roi)
     cube = load(path, q_unit_hint)
     pat = cube.max_dp() if reducer == "max" else to_pattern(cube, roi)
+    return pat, cube.calibration.q_per_px, cube.metadata
+
+
+def _load_file_frame(path, q_unit_hint=None, roi=None, coord_regex=None,
+                     reducer="mean", preprocess=None, lazy=False):
+    """Load one data file into a :class:`Frame` (coordinate from filename)."""
+    pat, q_per_px, meta = _reduce_one(path, q_unit_hint, roi, reducer, lazy)
     if preprocess is not None:
         pat = preprocess(pat)
     name = os.path.splitext(os.path.basename(path))[0]
     return Frame(pattern=pat, coord=coordinate_from_name(name, coord_regex),
-                 label=name, q_per_px=cube.calibration.q_per_px,
-                 metadata={"source": path, **cube.metadata})
+                 label=name, q_per_px=q_per_px,
+                 metadata={"source": path, **meta})
 
 
 def _load_folder_frame(folder, q_unit_hint=None, roi=None, coord_regex=None,
-                       reducer="mean", preprocess=None, pattern="*.dm4"):
+                       reducer="mean", preprocess=None, pattern="*.dm4",
+                       lazy=False):
     """Load all data files in one subfolder, averaged, into a :class:`Frame`."""
-    from ..io.readers import load
-    from ..preprocess.transform import to_pattern
-
     files = sorted(glob.glob(os.path.join(folder, pattern)))
     pats, q_per_px = [], None
     for p in files:
-        cube = load(p, q_unit_hint)
-        q_per_px = cube.calibration.q_per_px
-        pat = cube.max_dp() if reducer == "max" else to_pattern(cube, roi)
+        pat, q_per_px, _ = _reduce_one(p, q_unit_hint, roi, reducer, lazy)
         if preprocess is not None:
             pat = preprocess(pat)
         pats.append(pat)
@@ -103,21 +111,24 @@ class Series:
     # -- construction -------------------------------------------------------
     @classmethod
     def from_files(cls, paths, q_unit_hint=None, roi=None, coord_regex=None,
-                   reducer="mean", preprocess=None, n_jobs=1, progress=True):
+                   reducer="mean", preprocess=None, n_jobs=1, progress=True,
+                   lazy=False):
         """Load each file, collapse to a mean pattern, wrap as a Frame.
 
         ``paths`` may be a glob string, a directory, or a list of paths.
         ``reducer`` in {"mean", "max"} controls how each cube collapses.
         ``preprocess`` is an optional ``f(pattern) -> pattern`` cleanup hook.
         ``n_jobs`` parallelizes loading across processes (``-1`` = all cores);
-        ``progress`` shows a live bar.
+        ``progress`` shows a live bar. ``lazy=True`` memory-maps big 4D files and
+        averages in chunks (use for multi-GB cubes to keep RAM low).
         """
         from ..utils.parallel import parallel_map
 
         paths = cls._resolve_paths(paths)
         worker = functools.partial(_load_file_frame, q_unit_hint=q_unit_hint,
                                    roi=roi, coord_regex=coord_regex,
-                                   reducer=reducer, preprocess=preprocess)
+                                   reducer=reducer, preprocess=preprocess,
+                                   lazy=lazy)
         frames = parallel_map(worker, paths, n_jobs=n_jobs, progress=progress,
                               desc="loading files")
         return cls(frames)
@@ -125,7 +136,7 @@ class Series:
     @classmethod
     def from_folders(cls, root, coord_regex=None, roi=None, reducer="mean",
                      q_unit_hint=None, preprocess=None, pattern="*.dm4",
-                     n_jobs=1, progress=True):
+                     n_jobs=1, progress=True, lazy=False):
         """Build a series from SUBFOLDERS whose *name* encodes the coordinate.
 
         Layout expected (the common in-situ convention where each temperature is
@@ -154,7 +165,7 @@ class Series:
         worker = functools.partial(_load_folder_frame, q_unit_hint=q_unit_hint,
                                    roi=roi, coord_regex=coord_regex,
                                    reducer=reducer, preprocess=preprocess,
-                                   pattern=pattern)
+                                   pattern=pattern, lazy=lazy)
         frames = parallel_map(worker, subdirs, n_jobs=n_jobs, progress=progress,
                               desc="loading folders")
         return cls(frames)

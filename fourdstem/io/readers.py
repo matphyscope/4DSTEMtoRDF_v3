@@ -103,6 +103,68 @@ def load_generic(path, q_unit_hint=None):
     return _finalize(data, scale, unit, meta, q_unit_hint, name)
 
 
+def mean_pattern_lazy(path, q_unit_hint=None, reducer="mean", roi=None,
+                      chunk_rows=1):
+    """Memory-light mean/max diffraction pattern from a big 4D dm4 via memmap.
+
+    For a 5-6 GB 4D cube (e.g. 150x150x256x256), loading the whole thing just to
+    average it is wasteful and risky under parallelism. This memory-maps the file
+    (ncempy) and accumulates the reduction over the scan axis in chunks, holding
+    only a few detector frames in RAM at a time. It returns the same
+    ``(pattern_2d, q_per_px, metadata)`` as a full load.
+
+    Falls back to a full :func:`load` + reduction if memmap is unavailable or the
+    file isn't 4D, so it never breaks — worst case it behaves like the eager path.
+
+    reducer : {"mean", "max"}
+    roi : (y0, y1, x0, x1) scan ROI, optional.
+    chunk_rows : number of scan rows to read per chunk.
+    """
+    try:
+        from ncempy.io import dm
+        fdm = dm.fileDM(path)
+        try:
+            mm = fdm.getMemmap(0)
+        except Exception:
+            mm = None
+        if mm is None or np.ndim(mm) != 4:
+            raise RuntimeError("memmap unavailable or not 4D")
+
+        sy, sx, dy, dx = mm.shape
+        y0, y1, x0, x1 = (roi if roi is not None else (0, sy, 0, sx))
+        acc = None
+        count = 0
+        for iy in range(y0, y1, max(1, chunk_rows)):
+            iy1 = min(iy + max(1, chunk_rows), y1)
+            block = np.asarray(mm[iy:iy1, x0:x1], dtype=np.float64)  # (r, cx, dy, dx)
+            block = block.reshape(-1, dy, dx)
+            if reducer == "max":
+                b = block.max(0)
+                acc = b if acc is None else np.maximum(acc, b)
+            else:
+                b = block.sum(0)
+                acc = b if acc is None else acc + b
+                count += block.shape[0]
+        pattern = acc if reducer == "max" else acc / max(count, 1)
+
+        # calibration from the file header (detector = last dimension)
+        try:
+            scale = float(fdm.scale[0][-1])
+            unit = str(fdm.scaleUnit[0][-1])
+        except Exception:
+            scale, unit = 1.0, ""
+        q_per_px, conv = unit_to_inv_angstrom(scale, unit, q_unit_hint)
+        meta = {"reader": "ncempy-memmap", "unit": unit, "conv": conv,
+                "source": os.path.splitext(os.path.basename(path))[0]}
+        return pattern, q_per_px, meta
+    except Exception:
+        # robust fallback: full load then reduce (to_pattern is memory-safe)
+        from ..preprocess.transform import to_pattern
+        cube = load(path, q_unit_hint)
+        pat = cube.max_dp() if reducer == "max" else to_pattern(cube, roi)
+        return pat, cube.calibration.q_per_px, cube.metadata
+
+
 def from_array(data, q_per_px=None, r_per_px=None, name="array", metadata=None):
     """Wrap an in-memory array (already loaded elsewhere) into a DataCube."""
     cal = Calibration(q_per_px=q_per_px, r_per_px=r_per_px)

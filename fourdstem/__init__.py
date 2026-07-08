@@ -38,6 +38,7 @@ __version__ = "0.1.0"
 from .io import (
     DataCube, Calibration,
     load, load_dm4, load_dm3, load_generic, from_array, unit_to_inv_angstrom,
+    mean_pattern_lazy,
     save_result_npz, load_result_npz, save_datacube_npz, load_datacube_npz,
 )
 
@@ -82,7 +83,8 @@ __all__ = [
     "__version__",
     # io
     "DataCube", "Calibration", "load", "load_dm4", "load_dm3", "load_generic",
-    "from_array", "unit_to_inv_angstrom", "save_result_npz", "load_result_npz",
+    "from_array", "unit_to_inv_angstrom", "mean_pattern_lazy",
+    "save_result_npz", "load_result_npz",
     "save_datacube_npz", "load_datacube_npz",
     # preprocess
     "q_per_px_from_ring", "pixels_to_q", "q_to_pixels", "q_axis",

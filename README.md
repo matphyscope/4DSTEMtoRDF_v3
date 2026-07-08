@@ -165,6 +165,16 @@ peaks = fds.detect_bragg_peaks(cube.max_dp(), center=fds.find_center(mean, stopp
 `n_jobs`로 코어 수를 지정하고(`-1`=전체, 예: 32코어면 32개) 진행바를 켤 수 있습니다.
 범용 유틸 `fds.parallel_map(func, items, n_jobs, progress)`도 그대로 쓸 수 있습니다(joblib+tqdm, 없으면 순차 폴백).
 
+**큰 4D 파일 (수 GB) 메모리**: 파일 하나가 수 GB인 4D 큐브는 평균 낼 때도 통째로 float64로 올리지 않고
+native dtype에서 바로 누적합니다(`to_pattern`). 더 나아가 `lazy=True`(`from_directory`/`from_files`)를 쓰면
+memmap으로 청크 평균을 내 파일을 통째로 RAM에 안 올립니다(`fds.mean_pattern_lazy`). 병렬 로딩은 동시에
+여러 파일을 여니 큰 파일에선 `n_jobs=4~8`이 안전합니다.
+
+**q 캘리브레이션 주의**: 일부 DM(dm4)은 검출기 역격자 단위를 `1/nm`로 잘못 저장합니다(값은 사실 `1/Å`).
+그러면 q가 10배 작게 잡혀 reduction 구간과 안 맞습니다 — `load`/`from_directory`에 `q_unit_hint="1/A"`로
+강제하세요. 이 패키지는 `q = 1/d` 컨벤션이라 전자 PDF의 `q_int_max`는 보통 ~1.5 1/Å 수준입니다(12 아님).
+구간이 데이터 q 범위와 안 겹치면 `reduce_intensity`가 명확한 에러로 알려줍니다.
+
 노트북에 쓰이는 함수는 모두 패키지에 범용 함수로 들어 있습니다:
 `clean_pattern`/`remove_hot_pixels`(전처리), `Series.from_directory`/`from_files`/`from_folders`(로더),
 `decompose_profiles`(1D 프로파일 NMF/PCA + 분율), `fit_gaussian_peak`(가우시안 피팅),

@@ -17,6 +17,32 @@ def test_datacube_shapes_and_reductions():
     assert cube.max_dp().shape == (64, 64)
 
 
+def test_mean_pattern_lazy_fallback(tmp_path):
+    # non-dm4 file: memmap path fails -> falls back to full load + reduce.
+    from fourdstem.io.writers import save_datacube_npz
+    cube4d = np.random.default_rng(0).integers(0, 100, (4, 5, 12, 12)).astype(np.uint16)
+    dc = fds.from_array(cube4d, q_per_px=0.02)
+    p = tmp_path / "c.npz"
+    save_datacube_npz(str(p), dc)
+    pat, q_per_px, meta = fds.mean_pattern_lazy(str(p))
+    assert pat.shape == (12, 12)
+    expected = cube4d.reshape(-1, 12, 12).mean(0, dtype=np.float64)
+    assert np.allclose(pat, expected)
+    assert q_per_px == pytest.approx(0.02)
+
+
+def test_to_pattern_preserves_dtype_and_mean():
+    # 4D uint16 cube: to_pattern must accumulate in float64 without upcasting
+    # the whole cube, and return the correct mean.
+    rng = np.random.default_rng(0)
+    cube = rng.integers(0, 500, size=(4, 5, 16, 16), dtype=np.uint16)
+    pat = fds.to_pattern(cube)
+    assert pat.dtype == np.float64
+    assert pat.shape == (16, 16)
+    expected = cube.reshape(-1, 16, 16).mean(0, dtype=np.float64)
+    assert np.allclose(pat, expected)
+
+
 def test_datacube_roundtrip_npz(tmp_path):
     cube = fds.from_array(ring_pattern((48, 48)), q_per_px=0.03, name="p")
     p = tmp_path / "cube.npz"

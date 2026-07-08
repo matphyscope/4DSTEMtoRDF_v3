@@ -7,6 +7,7 @@ from .readers import (
     load_generic,
     from_array,
     unit_to_inv_angstrom,
+    mean_pattern_lazy,
 )
 from .writers import (
     save_result_npz,
@@ -24,6 +25,7 @@ __all__ = [
     "load_generic",
     "from_array",
     "unit_to_inv_angstrom",
+    "mean_pattern_lazy",
     "save_result_npz",
     "load_result_npz",
     "save_datacube_npz",

@@ -17,23 +17,28 @@ def to_pattern(data, roi=None):
 
     Accepts a DataCube or a raw ndarray (2D/3D/4D). ``roi=(y0,y1,x0,x1)``
     restricts a 4D scan before averaging.
+
+    Memory note: the mean is accumulated directly in float64 from the native
+    dtype (``mean(..., dtype=np.float64)``) and only the small 2D result is
+    materialized as float. A large 4D cube (e.g. 150x150x256x256) is therefore
+    NOT upcast to a full float64 copy — critical to avoid tens of GB of RAM.
     """
     if isinstance(data, DataCube):
         if roi is not None and data.ndim == 4:
             data = data.roi(*roi).data
         else:
             data = data.data
-    data = np.asarray(data, float)
+    data = np.asarray(data)                       # keep native dtype (no upcast)
     if data.ndim == 2:
-        return data
+        return np.asarray(data, np.float64)
     if data.ndim == 3:
-        return data.mean(0)
+        return data.mean(0, dtype=np.float64)
     if data.ndim == 4:
-        sy, sx, dy, dx = data.shape
+        dy, dx = data.shape[-2:]
         if roi is not None:
             y0, y1, x0, x1 = roi
             data = data[y0:y1, x0:x1]
-        return data.reshape(-1, dy, dx).mean(0)
+        return data.reshape(-1, dy, dx).mean(0, dtype=np.float64)
     raise ValueError(f"unexpected data ndim={data.ndim}")
 
 
