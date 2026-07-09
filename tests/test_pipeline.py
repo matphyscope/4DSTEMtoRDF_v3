@@ -348,6 +348,24 @@ def test_localize_interface_per_row_rejects_edges():
     assert not np.any(im & info["bulk_mask"])
 
 
+def test_localize_interface_absent_when_homogeneous():
+    # a homogeneous scan (no interface) must report present=False, area 0
+    rng = np.random.default_rng(0)
+    from tests.synthetic import ring_pattern
+    bulk = ring_pattern((48, 48), rings=((10, 3, 1.0),), central_beam=0)
+    Sy, Sx = 16, 40
+    cube = np.empty((Sy, Sx, 48, 48))
+    for iy in range(Sy):
+        for ix in range(Sx):
+            cube[iy, ix] = (1.0 + 2.0 * iy / Sy) * bulk   # only a brightness gradient
+    cube += 0.01 * rng.standard_normal(cube.shape)
+    dc = fds.from_array(cube, q_per_px=1.0)
+    info = fds.localize_interface(dc, center=(24, 24), feature="structural",
+                                  rings=[(6, 12)], per_row=True, min_snr=4.0)
+    assert info["present"] is False
+    assert info["interface_area"] == 0
+
+
 def test_rdf_quality_report():
     q = np.linspace(0.05, 1.6, 400)
     f_sq, f_avg_sq = fds.scattering_terms(q, {"Si": 1, "O": 2})

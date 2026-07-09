@@ -91,6 +91,25 @@ def _row_signals(work, sign, smooth, broad_win, row_detrend):
     return R
 
 
+def _robust_polyfit(y, x, w, order, n_iter=2):
+    """Weighted polynomial fit x(y) with iterative outlier down-weighting — gives
+    a smooth, near-straight interface line that ignores noisy wandering rows."""
+    order = int(max(0, order))
+    yy = np.asarray(y, float)
+    xx = np.asarray(x, float)
+    ww = np.clip(np.asarray(w, float), 0, None) + 1e-9
+    coef = np.polyfit(yy, xx, order, w=ww)
+    for _ in range(n_iter):
+        pred = np.polyval(coef, yy)
+        res = np.abs(xx - pred)
+        mad = np.median(res) + 1e-9
+        keep = res <= 3.0 * mad
+        if keep.sum() <= order + 1:
+            break
+        coef = np.polyfit(yy[keep], xx[keep], order, w=ww[keep])
+    return coef
+
+
 def _half_max_band(row, pk, floor):
     """Half-maximum crossings of a single-row profile around peak index ``pk``."""
     n = row.size
@@ -109,7 +128,9 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
                        smooth=3, broad_win=None, line_sign="auto",
                        fit_halfwidth=8, band_sigma=2.0, bulk_gap=3.0,
                        min_width=1.0, per_row=False, search_halfwidth=None,
-                       edge_margin=None, prominence_frac=0.35):
+                       edge_margin=None, prominence_frac=0.35,
+                       line_order=1, min_snr=4.0, min_good_frac=0.5,
+                       n_seed=10, corridor=None):
     """Locate a thin interface line and split the scan into interface / bulk — no ML.
 
     Parameters
@@ -163,6 +184,30 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
     prominence_frac : float
         Per-row connectivity gate: keep a row only if its peak prominence is at
         least this fraction of the median row prominence.
+    line_order : int
+        Degree of the robust polynomial fit through the per-row centers.
+        ``0`` = perfectly vertical (constant x), ``1`` = straight with tilt
+        (default; straightens a wavy track), ``2`` = gentle curve.
+    min_snr : float
+        Presence threshold: the global peak prominence must exceed ``min_snr``
+        times the profile's robust noise or the interface is declared ABSENT
+        (``present=False``, area/width = 0). Distinguishes a real line from a
+        homogenized scan (e.g. above the interface-disappearance temperature).
+    min_good_frac : float
+        Presence also requires at least this fraction of rows to carry a
+        prominent, connected peak.
+    n_seed : int
+        Two-pass anchor: the ``n_seed`` most prominent ("most confident") rows
+        seed a robust line; every row is then searched only within a corridor
+        around that line, so noisy rows cannot wander off.
+    corridor : int, optional
+        Half-width (px) of the search corridor around the seed line. Default
+        scales with the fitted line width.
+
+    Notes
+    -----
+    Also returns ``present`` (bool), ``snr``, and ``good_frac`` so a temperature
+    series can drop the interface where it has homogenized.
 
     Returns
     -------
@@ -205,58 +250,92 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
         sigma = 1.0
     contrast = float(sp[x0])
 
+    # Global presence SNR: peak prominence vs the profile's robust noise away
+    # from the line. A homogenized (no-interface) scan has a low SNR.
+    away = np.abs(np.arange(m0, m1) - x0) > max(3, 2 * sigma)
+    core = sp[m0:m1]
+    noise = 1.4826 * np.median(np.abs(core[away] - np.median(core[away]))) if away.any() else core.std()
+    snr = float(contrast / noise) if noise > 0 else float("inf")
+
     cols = np.arange(Sx)[None, :]
 
     if per_row:
-        # Horizontal per-row line profiles. In each row track the interface peak
-        # near the (connected) running center, measure its half-max band, and
-        # gate weak rows so only the CONTINUOUS line becomes area.
+        # Two-pass horizontal per-row localization:
+        #  (1) find each row's best peak; take the N most prominent ("confident")
+        #      rows and fit a robust near-straight line through them -> a corridor.
+        #  (2) search every row ONLY inside that corridor, so noisy rows cannot
+        #      wander off. Then gate weak rows and take the half-max (FWHM) band.
         R = _row_signals(work, sign, smooth, broad_win, row_detrend)
-        hw = int(search_halfwidth or max(4, round(4 * sigma)))
-        centers = np.full(Sy, x_if)
-        proms = np.zeros(Sy)
-        bands = [None] * Sy
-        track = x_if
+        yy = np.arange(Sy)
+        floors = np.median(R[:, m0:m1], axis=1)
+
+        # pass 1: unconstrained peak + prominence per row (edges excluded)
+        pk1 = m0 + np.argmax(R[:, m0:m1], axis=1)
+        prom1 = R[yy, pk1] - floors
+        n_seed = int(min(max(3, n_seed), Sy))
+        seed = np.argsort(prom1)[-n_seed:]            # most confident rows
+        seed = seed[prom1[seed] > 0]
+        if seed.size > line_order + 1:
+            coef = _robust_polyfit(yy[seed], pk1[seed], prom1[seed], line_order)
+        else:
+            coef = np.array([float(x_if)])
+        seed_line = np.clip(np.polyval(coef, yy), m0, m1 - 1)
+        corr = int(corridor or max(4, round(3 * sigma)))
+
+        # pass 2: constrained peak inside the corridor around the seed line
+        centers = np.empty(Sy)
+        proms = np.empty(Sy)
         for y in range(Sy):
-            lo = max(m0, int(round(track)) - hw)
-            hi = min(m1, int(round(track)) + hw + 1)
+            lo = max(m0, int(round(seed_line[y])) - corr)
+            hi = min(m1, int(round(seed_line[y])) + corr + 1)
             if hi - lo < 3:
                 lo, hi = m0, m1
-            seg = R[y, lo:hi]
-            pk = lo + int(np.argmax(seg))
-            floor = float(np.median(R[y, m0:m1]))
-            proms[y] = R[y, pk] - floor
+            pk = lo + int(np.argmax(R[y, lo:hi]))
             centers[y] = pk
-            bands[y] = _half_max_band(R[y], pk, floor)
-            track = 0.5 * track + 0.5 * pk           # connectivity: follow the line
-        # connectivity gate: keep rows whose peak is prominent vs the median
+            proms[y] = R[y, pk] - floors[y]
         ref = np.median(proms[proms > 0]) if np.any(proms > 0) else 0.0
         good = proms >= max(prominence_frac * ref, 1e-9)
-        # smooth the kept centers; interpolate the line across gaps for display
-        line = centers.astype(float)
-        if good.any():
-            yy = np.arange(Sy)
-            line = np.interp(yy, yy[good], _smooth1d(centers[good].astype(float), 3))
+        good_frac = float(good.mean())
+
+        # robust straight/low-order fit through the constrained, prominent rows
+        if good.sum() > line_order + 1:
+            coef = _robust_polyfit(yy[good], centers[good], proms[good], line_order)
+            line = np.clip(np.polyval(coef, yy), m0, m1 - 1)
+        else:
+            line = seed_line
+
+        present = (snr >= min_snr) and (good_frac >= min_good_frac)
+
+        # FWHM band measured on the fitted line (so the ribbon is smooth)
         interface_mask = np.zeros((Sy, Sx), bool)
         fwhms = []
-        for y in range(Sy):
-            if not good[y]:
-                continue
-            l, r = bands[y]
-            l = max(m0, min(l, Sx - 1)); r = max(l, min(r, Sx - 1))
-            interface_mask[y, l:r + 1] = True
-            fwhms.append(r - l + 1)
-        width = float(np.median(fwhms)) if fwhms else float(max(min_width, 2.3548 * sigma))
+        if present:
+            for y in range(Sy):
+                if not good[y]:
+                    continue
+                pk = int(round(line[y]))
+                floor = float(np.median(R[y, m0:m1]))
+                l, r = _half_max_band(R[y], pk, floor)
+                l = max(m0, min(l, Sx - 1)); r = max(l, min(r, Sx - 1))
+                interface_mask[y, l:r + 1] = True
+                fwhms.append(r - l + 1)
+        width = float(np.median(fwhms)) if fwhms else 0.0
+        area = int(interface_mask.sum())
+        if not present:                              # keep a 1-px line for RDF, area=0
+            interface_mask = np.abs(cols - line[:, None]) <= 0.5
         dmap = np.abs(cols - line[:, None])
         sig_eff = max(width / 2.3548, sigma)
         bulk_mask = (dmap >= max(bulk_gap * sig_eff, width / 2 + 2.0)) & ~interface_mask
     else:
+        present = snr >= min_snr
+        good_frac = 1.0
         width = float(max(min_width, 2.3548 * sigma))
         line = np.full(Sy, x_if, float)
         dmap = np.abs(cols - line[:, None])
         half_w = max(min_width, band_sigma * sigma)
         interface_mask = dmap <= half_w
         bulk_mask = dmap >= max(bulk_gap * sigma, half_w + 1.0)
+        area = int(interface_mask.sum()) if present else 0
 
     if bulk_mask.sum() < 5:                          # keep a real bulk set
         bulk_mask = (dmap >= np.percentile(dmap, 60)) & ~interface_mask
@@ -268,4 +347,5 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
     return dict(s=s, prof=sp, x_if=x_if, line=line, sigma=sigma,
                 width=width, contrast=contrast, dmap=dmap,
                 interface_mask=interface_mask, bulk_mask=bulk_mask,
-                interface_area=int(interface_mask.sum()), center=center)
+                interface_area=int(area), present=bool(present),
+                snr=snr, good_frac=float(good_frac), center=center)
