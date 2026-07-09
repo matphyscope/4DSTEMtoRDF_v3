@@ -60,7 +60,7 @@ from .analysis import (
     find_peaks_1d, refine_peak_parabolic, first_peak_position, peak_centroid,
     fit_gaussian_peak,
     DecompositionResult, ProfileDecomposition, nmf_decompose, pca_decompose,
-    decompose_profiles, cluster_cube, reconstruct,
+    decompose_profiles, cluster_cube, reconstruct, localize_interface,
     RDFConfig, RDFResult, scattering_terms, damping_window, sine_ft,
     reduce_intensity, pattern_to_rdf, save_rdf, load_rdf, rdf_quality,
 )
@@ -101,6 +101,7 @@ __all__ = [
     "refine_peak_parabolic", "first_peak_position", "peak_centroid",
     "fit_gaussian_peak", "DecompositionResult", "ProfileDecomposition",
     "nmf_decompose", "pca_decompose", "decompose_profiles", "cluster_cube", "reconstruct",
+    "localize_interface",
     "RDFConfig", "RDFResult", "scattering_terms", "damping_window", "sine_ft",
     "reduce_intensity", "pattern_to_rdf", "save_rdf", "load_rdf", "rdf_quality",
     # insitu

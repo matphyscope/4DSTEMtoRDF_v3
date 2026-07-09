@@ -295,6 +295,32 @@ def test_cluster_cube_structural_catches_thin_interface():
     assert if_labels[0] != np.bincount(bulk_labels.ravel()).argmax()
 
 
+def test_localize_interface_vertical_band():
+    from tests.synthetic import ring_pattern
+    bulk = ring_pattern((48, 48), rings=((10, 3, 1.0),), central_beam=0)
+    iface = ring_pattern((48, 48), rings=((8, 3, 1.0),), central_beam=0)
+    Sy, Sx = 12, 20
+    x_if = 13
+    cube = np.empty((Sy, Sx, 48, 48))
+    for iy in range(Sy):
+        for ix in range(Sx):
+            bright = 1.0 + 3.0 * iy / Sy       # vertical brightness gradient (nuisance)
+            # a 3-column-wide interface band
+            w = 1.0 if abs(ix - x_if) <= 1 else 0.0
+            cube[iy, ix] = bright * (iface if w else bulk)
+    dc = fds.from_array(cube, q_per_px=1.0)
+    info = fds.localize_interface(dc, center=(24, 24), rings=[(6, 12)],
+                                  detrend=True, detrend_sigma=3.0)
+    assert abs(info["x_if"] - x_if) <= 1          # found the band, not the gradient
+    assert info["interface_mask"].sum() > 0
+    assert info["bulk_mask"].sum() > 0
+    # interface mask must be concentrated at x_if, bulk far away
+    im_cols = np.where(info["interface_mask"].any(0))[0]
+    assert im_cols.min() >= x_if - 2 and im_cols.max() <= x_if + 2
+    # masks are disjoint
+    assert not np.any(info["interface_mask"] & info["bulk_mask"])
+
+
 def test_rdf_quality_report():
     q = np.linspace(0.05, 1.6, 400)
     f_sq, f_avg_sq = fds.scattering_terms(q, {"Si": 1, "O": 2})
