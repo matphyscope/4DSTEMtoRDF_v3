@@ -43,6 +43,21 @@ def annular_dark_field(cube, center=None, r_inner=None, r_outer=None):
     return cube.get_virtual_image(annular_mask(dp, center, r_inner, r_outer))
 
 
+def average_pattern(cube, scan_mask):
+    """Mean diffraction pattern over the scan positions where ``scan_mask`` is True.
+
+    The workhorse for region- or distance-resolved analysis: pick a set of scan
+    positions (a phase region, a distance band from an interface) and average
+    their patterns into one high-SNR diffraction pattern to feed to
+    :func:`~fourdstem.analysis.rdf.pattern_to_rdf`.
+    """
+    flat = cube._flat_patterns()
+    m = np.asarray(scan_mask, bool).ravel()
+    if m.sum() == 0:
+        return np.full(cube.dp_shape, np.nan)
+    return flat[m].mean(0, dtype=np.float64)
+
+
 def structural_map(cube, center=None, r_inner=None, r_outer=None,
                    norm_inner=None, norm_outer=None):
     """Brightness-normalized structural virtual image: ring-DF / total.

@@ -103,6 +103,17 @@ def test_detect_bragg_peaks_positions():
     assert np.median(qs) == pytest.approx(45 * 0.02, abs=0.05)
 
 
+def test_average_pattern_over_scan_mask():
+    cube = np.arange(4 * 5 * 6 * 6, dtype=float).reshape(4, 5, 6, 6)
+    dc = fds.from_array(cube)
+    mask = np.zeros((4, 5), bool)
+    mask[0, 0] = True
+    mask[1, 2] = True
+    avg = fds.average_pattern(dc, mask)
+    assert avg.shape == (6, 6)
+    assert np.allclose(avg, (cube[0, 0] + cube[1, 2]) / 2)
+
+
 def test_structural_map_cancels_brightness():
     # 4D: left half ring at r=8, right half ring at r=13; a per-position
     # brightness ramp. structural_map (ring/total) should reveal the structural

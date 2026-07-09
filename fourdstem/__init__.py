@@ -56,7 +56,7 @@ from .preprocess import (
 from .analysis import (
     azimuthal_integrate, azimuthal_variance,
     virtual_image, bright_field, annular_dark_field, center_of_mass_map,
-    structural_map,
+    structural_map, average_pattern,
     find_peaks_1d, refine_peak_parabolic, first_peak_position, peak_centroid,
     fit_gaussian_peak,
     DecompositionResult, ProfileDecomposition, nmf_decompose, pca_decompose,
@@ -97,7 +97,7 @@ __all__ = [
     "bin_cube_detector", "polar_transform",
     # analysis
     "azimuthal_integrate", "azimuthal_variance", "virtual_image", "bright_field",
-    "annular_dark_field", "center_of_mass_map", "structural_map", "find_peaks_1d",
+    "annular_dark_field", "center_of_mass_map", "structural_map", "average_pattern", "find_peaks_1d",
     "refine_peak_parabolic", "first_peak_position", "peak_centroid",
     "fit_gaussian_peak", "DecompositionResult", "ProfileDecomposition",
     "nmf_decompose", "pca_decompose", "decompose_profiles", "reconstruct",
