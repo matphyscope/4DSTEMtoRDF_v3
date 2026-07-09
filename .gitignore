@@ -27,3 +27,7 @@ env/
 .vscode/
 .idea/
 *.egg-info/
+
+# nb4 generated figures/CSVs
+nb4_outputs/
+**/nb4_outputs/
