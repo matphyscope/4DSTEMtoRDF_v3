@@ -201,6 +201,21 @@ def test_nmf_separates_amorphous_and_crystalline():
     assert (res.loadings >= -1e-6).all()
 
 
+def test_nmf_warns_on_signed_data():
+    pytest.importorskip("sklearn")
+    # signed profiles (like G(r)) should trigger the NMF non-negativity warning
+    r = np.linspace(0, 10, 100)
+    X = np.vstack([np.sin(r + 0.1 * i) for i in range(6)])  # ranges [-1, 1]
+    with pytest.warns(UserWarning, match="non-negative|pca"):
+        fds.decompose_profiles(X, n_components=2, method="nmf")
+    # PCA on the same signed data must NOT warn
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        res = fds.decompose_profiles(X, n_components=2, method="pca")
+    assert res.explained_variance_ratio is not None
+
+
 def test_pca_reconstruct_roundtrip():
     pytest.importorskip("sklearn")
     cube = fds.from_array(scan_cube((5, 5), (48, 48)))

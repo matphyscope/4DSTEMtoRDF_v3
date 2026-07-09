@@ -217,6 +217,20 @@ def decompose_profiles(profiles, n_components=2, method="nmf", x=None,
 
     if method == "nmf":
         from sklearn.decomposition import NMF
+        # NMF requires non-negative data. A reduced PDF G(r) (or phi(q)) is
+        # SIGNED — its troughs/baseline are negative — so clipping them to 0
+        # destroys real structure and yields meaningless components. Warn loudly;
+        # for signed profiles use method="pca" instead.
+        neg_frac = float(np.mean(X < -1e-9))
+        if neg_frac > 0.02:
+            import warnings
+            warnings.warn(
+                f"decompose_profiles(method='nmf') got data that is {neg_frac:.0%} "
+                "negative (e.g. G(r)/phi(q) have troughs). NMF needs non-negative "
+                "input, so negatives are clipped to 0 — components will be "
+                "distorted. Use method='pca' for signed profiles; keep NMF for "
+                "non-negative data like diffraction patterns / I(q)."
+            )
         Xn = np.clip(np.nan_to_num(X, nan=0.0), 0, None)
         model = NMF(n_components=n_components, init="nndsvda",
                     random_state=random_state,
