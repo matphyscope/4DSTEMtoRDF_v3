@@ -130,7 +130,8 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
                        min_width=1.0, per_row=False, search_halfwidth=None,
                        edge_margin=None, prominence_frac=0.35,
                        line_order=1, min_snr=4.0, min_good_frac=0.5,
-                       n_seed=10, corridor=None, coherence_max=None):
+                       n_seed=10, corridor=None, coherence_max=None,
+                       anchor=None):
     """Locate a thin interface line and split the scan into interface / bulk — no ML.
 
     Parameters
@@ -208,6 +209,14 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
         Presence gate: the confident seed rows must AGREE on x to within this
         spread (px). Scattered seed peaks (no coherent line — e.g. a homogenized
         scan that produced a spurious diagonal) → ABSENT. Default ``~3*sigma``.
+    anchor : float, optional
+        Externally supplied line position (px) to localize AROUND, overriding the
+        internal peak search. Use it to track a *drifting* interface across a
+        temperature series: fit x(T) from the confident temperatures and pass the
+        predicted x here so contrast/width are measured at the expected position
+        instead of on noise. The first argument may also be a precomputed 2-D
+        feature/structural map (not just a DataCube), so this re-tracking needs no
+        cube reload.
 
     Notes
     -----
@@ -221,13 +230,18 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
     ``sigma``, ``width`` (FWHM px), ``contrast``, ``dmap`` (distance map),
     ``interface_mask`` / ``bulk_mask``, ``interface_area``, ``center``.
     """
-    from .virtual_image import _resolve_center
     from .peaks import fit_gaussian_peak
 
-    center = _resolve_center(cube, center)
-    s = _feature_map(cube, feature, center, rings, bf_radius)
+    # Accept either a DataCube (build the feature map) or a precomputed 2-D map
+    # (e.g. a stored structural map, for cheap temperature-drift re-tracking).
+    if hasattr(cube, "dp_shape"):
+        from .virtual_image import _resolve_center
+        center = _resolve_center(cube, center)
+        s = _feature_map(cube, feature, center, rings, bf_radius)
+    else:
+        s = np.asarray(cube, float)
     if s.ndim != 2:
-        raise ValueError("localize_interface needs a 2-D scan grid")
+        raise ValueError("localize_interface needs a 2-D scan grid (DataCube or map)")
 
     work = s.T if axis == "horizontal" else s      # line now varies along axis 1
     Sy, Sx = work.shape
@@ -242,7 +256,10 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
     else:
         sign = -1.0 if str(line_sign).lower() in ("dark", "dip", "neg", "-") else 1.0
     sp = sign * prof                                # interface is now a peak
-    x0 = m0 + int(np.argmax(sp[m0:m1]))             # global center, edges excluded
+    if anchor is not None:                          # measure at an externally supplied
+        x0 = int(np.clip(round(float(anchor)), m0, m1 - 1))   # position (drift tracking)
+    else:
+        x0 = m0 + int(np.argmax(sp[m0:m1]))         # global center, edges excluded
     xs = np.arange(Sx, dtype=float)
 
     g = fit_gaussian_peak(xs, sp, max(m0, x0 - fit_halfwidth),
@@ -286,9 +303,12 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
         # Anchor the corridor VERTICALLY on the position the confident rows agree
         # on (robust median), reconciled with the global column-profile center —
         # NOT a tilted fit, which overfits a diagonal when the line is weak.
-        seed_center = float(np.median(pk1[seed])) if seed.size else x_if
-        if abs(seed_center - x_if) > corr:
-            seed_center = x_if
+        if anchor is not None:                       # drift-tracking: trust the anchor
+            seed_center = float(np.clip(anchor, m0, m1 - 1))
+        else:
+            seed_center = float(np.median(pk1[seed])) if seed.size else x_if
+            if abs(seed_center - x_if) > corr:
+                seed_center = x_if
         # coherence: do the confident rows actually AGREE on an x? (scattered = no line)
         seed_spread = (float(np.median(np.abs(pk1[seed] - np.median(pk1[seed]))))
                        if seed.size else float("inf"))

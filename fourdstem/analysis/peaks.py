@@ -125,7 +125,10 @@ def fit_gaussian_peak(x, y, x_min, x_max, with_offset=True):
         p0 = [A0, mu0, sig0]
 
     try:
-        popt, _ = curve_fit(model, xs, ys, p0=p0, maxfev=10000)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")          # benign OptimizeWarning on flat peaks
+            popt, _ = curve_fit(model, xs, ys, p0=p0, maxfev=10000)
     except Exception:
         return fail
     A, mu, sig = popt[0], popt[1], abs(popt[2])

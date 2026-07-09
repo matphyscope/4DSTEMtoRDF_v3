@@ -348,6 +348,29 @@ def test_localize_interface_per_row_rejects_edges():
     assert not np.any(im & info["bulk_mask"])
 
 
+def test_localize_interface_map_and_anchor():
+    # re-track from a precomputed 2-D map at an external anchor (drift tracking),
+    # no DataCube needed
+    from tests.synthetic import ring_pattern
+    bulk = ring_pattern((48, 48), rings=((10, 3, 1.0),), central_beam=0)
+    iface = ring_pattern((48, 48), rings=((8, 3, 1.0),), central_beam=0)
+    Sy, Sx = 12, 40
+    x_if = 22
+    cube = np.empty((Sy, Sx, 48, 48))
+    for iy in range(Sy):
+        for ix in range(Sx):
+            cube[iy, ix] = (1 + 2 * iy / Sy) * (iface if abs(ix - x_if) <= 1 else bulk)
+    dc = fds.from_array(cube, q_per_px=1.0)
+    smap = fds.localize_interface(dc, center=(24, 24), feature="structural",
+                                  rings=[(6, 12)], per_row=True)["s"]
+    # feed the stored map back with an anchor; must localize at the anchor
+    info = fds.localize_interface(smap, anchor=x_if, per_row=True, line_sign="bright")
+    assert abs(info["x_if"] - x_if) <= 1
+    # a deliberately wrong anchor confines the search elsewhere
+    info2 = fds.localize_interface(smap, anchor=6, per_row=True, line_sign="bright")
+    assert info2["x_if"] < x_if - 4
+
+
 def test_localize_interface_absent_when_homogeneous():
     # a homogeneous scan (no interface) must report present=False, area 0
     rng = np.random.default_rng(0)
