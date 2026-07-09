@@ -130,7 +130,7 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
                        min_width=1.0, per_row=False, search_halfwidth=None,
                        edge_margin=None, prominence_frac=0.35,
                        line_order=1, min_snr=4.0, min_good_frac=0.5,
-                       n_seed=10, corridor=None):
+                       n_seed=10, corridor=None, coherence_max=None):
     """Locate a thin interface line and split the scan into interface / bulk — no ML.
 
     Parameters
@@ -201,8 +201,13 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
         seed a robust line; every row is then searched only within a corridor
         around that line, so noisy rows cannot wander off.
     corridor : int, optional
-        Half-width (px) of the search corridor around the seed line. Default
-        scales with the fitted line width.
+        Half-width (px) of the vertical search corridor around the anchor. The
+        fitted line is clipped to this corridor, so a residual tilt can never
+        become a runaway diagonal. Increase it for a genuinely tilted interface.
+    coherence_max : float, optional
+        Presence gate: the confident seed rows must AGREE on x to within this
+        spread (px). Scattered seed peaks (no coherent line — e.g. a homogenized
+        scan that produced a spurious diagonal) → ABSENT. Default ``~3*sigma``.
 
     Notes
     -----
@@ -269,20 +274,27 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
         yy = np.arange(Sy)
         floors = np.median(R[:, m0:m1], axis=1)
 
+        corr = int(corridor or max(4, round(3 * sigma)))
+        cmax = float(coherence_max if coherence_max is not None else max(4.0, 3 * sigma))
+
         # pass 1: unconstrained peak + prominence per row (edges excluded)
         pk1 = m0 + np.argmax(R[:, m0:m1], axis=1)
         prom1 = R[yy, pk1] - floors
         n_seed = int(min(max(3, n_seed), Sy))
         seed = np.argsort(prom1)[-n_seed:]            # most confident rows
         seed = seed[prom1[seed] > 0]
-        if seed.size > line_order + 1:
-            coef = _robust_polyfit(yy[seed], pk1[seed], prom1[seed], line_order)
-        else:
-            coef = np.array([float(x_if)])
-        seed_line = np.clip(np.polyval(coef, yy), m0, m1 - 1)
-        corr = int(corridor or max(4, round(3 * sigma)))
+        # Anchor the corridor VERTICALLY on the position the confident rows agree
+        # on (robust median), reconciled with the global column-profile center —
+        # NOT a tilted fit, which overfits a diagonal when the line is weak.
+        seed_center = float(np.median(pk1[seed])) if seed.size else x_if
+        if abs(seed_center - x_if) > corr:
+            seed_center = x_if
+        # coherence: do the confident rows actually AGREE on an x? (scattered = no line)
+        seed_spread = (float(np.median(np.abs(pk1[seed] - np.median(pk1[seed]))))
+                       if seed.size else float("inf"))
+        seed_line = np.full(Sy, seed_center)
 
-        # pass 2: constrained peak inside the corridor around the seed line
+        # pass 2: constrained peak inside the vertical corridor around the anchor
         centers = np.empty(Sy)
         proms = np.empty(Sy)
         for y in range(Sy):
@@ -297,14 +309,18 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
         good = proms >= max(prominence_frac * ref, 1e-9)
         good_frac = float(good.mean())
 
-        # robust straight/low-order fit through the constrained, prominent rows
+        # robust low-order fit through the constrained rows, then CLIP to the
+        # corridor so a residual tilt can never become a runaway diagonal.
         if good.sum() > line_order + 1:
             coef = _robust_polyfit(yy[good], centers[good], proms[good], line_order)
-            line = np.clip(np.polyval(coef, yy), m0, m1 - 1)
+            line = np.polyval(coef, yy)
         else:
-            line = seed_line
+            line = seed_line.astype(float)
+        line = np.clip(line, seed_center - corr, seed_center + corr)
+        line = np.clip(line, m0, m1 - 1)
 
-        present = (snr >= min_snr) and (good_frac >= min_good_frac)
+        present = ((snr >= min_snr) and (good_frac >= min_good_frac)
+                   and (seed_spread <= cmax))
 
         # FWHM band measured on the fitted line (so the ribbon is smooth)
         interface_mask = np.zeros((Sy, Sx), bool)
