@@ -266,6 +266,35 @@ def test_cluster_cube_two_phases():
     assert len(set(left)) == 1 and len(set(right)) == 1 and left[0] != right[0]
 
 
+def test_cluster_cube_structural_catches_thin_interface():
+    pytest.importorskip("sklearn")
+    pytest.importorskip("scipy")
+    # A THIN vertical interface (one column) with a different ring sits in a bulk
+    # field, plus a strong TOP->BOTTOM brightness gradient. feature="radial" would
+    # split by the row gradient (dominant variance); feature="structural" with
+    # detrend must instead isolate the interface column.
+    from tests.synthetic import ring_pattern
+    bulk = ring_pattern((48, 48), rings=((10, 3, 1.0),), central_beam=0)
+    iface = ring_pattern((48, 48), rings=((8, 3, 1.0),), central_beam=0)
+    Ry, Rx = 10, 12
+    x_if = 7
+    cube = np.empty((Ry, Rx, 48, 48))
+    for iy in range(Ry):
+        for ix in range(Rx):
+            bright = 1.0 + 4.0 * iy / Ry           # vertical brightness gradient
+            cube[iy, ix] = bright * (iface if ix == x_if else bulk)
+    dc = fds.from_array(cube, q_per_px=1.0)
+    labels, patterns, km = fds.cluster_cube(
+        dc, n_clusters=2, center=(24, 24), feature="structural",
+        rings=[(6, 12), (7, 11)], detrend=True, detrend_sigma=3.0)
+    assert labels.shape == (Ry, Rx)
+    # the interface column must be a single, distinct label from the bulk
+    if_labels = labels[:, x_if]
+    bulk_labels = np.delete(labels, x_if, axis=1)
+    assert len(set(if_labels.tolist())) == 1
+    assert if_labels[0] != np.bincount(bulk_labels.ravel()).argmax()
+
+
 def test_rdf_quality_report():
     q = np.linspace(0.05, 1.6, 400)
     f_sq, f_avg_sq = fds.scattering_terms(q, {"Si": 1, "O": 2})

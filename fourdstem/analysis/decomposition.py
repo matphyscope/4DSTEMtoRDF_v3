@@ -187,8 +187,39 @@ def pca_decompose(cube, n_components=8, mask=None, normalize=None, whiten=False,
     )
 
 
+def _structural_features(cube, center, rings, detrend, detrend_sigma):
+    """Feature matrix of brightness-cancelled ring-contrast maps, one column per
+    ring band, optionally with the smooth scan-gradient detrended and each column
+    z-scored so bands weigh equally in k-means."""
+    from .virtual_image import structural_map
+
+    dp = cube.dp_shape
+    m = min(dp)
+    if rings is None:
+        # a few bands spanning the amorphous ring / FSDP region
+        rings = [(m / 6.0, m / 4.0), (m / 5.0, m / 3.5),
+                 (m / 4.5, m / 3.0), (m / 3.5, m / 2.6)]
+    scan = cube.scan_shape
+    cols = []
+    for r_in, r_out in rings:
+        smap = np.asarray(structural_map(cube, center=center,
+                                         r_inner=r_in, r_outer=r_out), float)
+        if detrend and scan and smap.ndim == 2:
+            try:
+                from scipy.ndimage import gaussian_filter
+                bg = gaussian_filter(smap, detrend_sigma)
+            except Exception:
+                bg = smap.mean()
+            smap = smap - bg
+        col = smap.reshape(-1)
+        sd = col.std()
+        cols.append((col - col.mean()) / (sd if sd > 0 else 1.0))
+    return np.stack(cols, axis=1)
+
+
 def cluster_cube(cube, n_clusters=2, center=None, mask=None, feature="radial",
-                 n_bins=None, normalize="sum", random_state=0):
+                 n_bins=None, normalize="sum", random_state=0,
+                 rings=None, detrend=False, detrend_sigma=8.0):
     """k-means cluster scan positions into phases (hard assignment, no threshold).
 
     Each scan position is assigned to exactly one cluster from its diffraction
@@ -200,9 +231,23 @@ def cluster_cube(cube, n_clusters=2, center=None, mask=None, feature="radial",
       each cluster (feed to ``pattern_to_rdf`` for a per-phase RDF)
     * ``model`` — the fitted KMeans
 
-    ``feature="radial"`` clusters on per-position I(q) (denoised, recommended);
-    ``"pixel"`` clusters on the raw masked pixels. ``normalize`` removes
-    per-position brightness so clusters reflect structure.
+    Feature choices
+    ---------------
+    * ``"radial"`` — per-position I(q) (denoised). Robust default, but the whole
+      profile is dominated by the direct beam + overall brightness, so a *thin,
+      subtle* interface can be outvoted by a bulk dose/thickness gradient.
+    * ``"structural"`` — cluster on brightness-cancelled **ring-contrast** maps
+      (``structural_map`` over each band in ``rings``), i.e. exactly the signal
+      that separates a phase/interface in a q-contrast scan. Use this when
+      ``"radial"`` splits the scan by brightness instead of structure. With
+      ``detrend=True`` a smooth (Gaussian, ``detrend_sigma`` px) background is
+      subtracted from each ring map first, removing the slow thickness gradient
+      so a sharp interface line is not swamped by it. This is NOT a threshold —
+      k-means still finds the split in the (multi-ring, detrended) feature space.
+    * ``"pixel"`` — raw masked pixels.
+
+    ``rings`` is a list of ``(r_inner, r_outer)`` px bands (defaults to a few
+    around the amorphous ring). ``normalize`` removes per-position brightness.
     """
     from sklearn.cluster import KMeans
 
@@ -212,7 +257,9 @@ def cluster_cube(cube, n_clusters=2, center=None, mask=None, feature="radial",
         md = cube.mean_dp()
         center, _ = find_center(md, beam_stopper_mask(md))
 
-    if feature == "radial":
+    if feature == "structural":
+        X = _structural_features(cube, center, rings, detrend, detrend_sigma)
+    elif feature == "radial":
         from .azimuthal import radial_profiles
         X, _ = radial_profiles(cube, center, n_bins=n_bins, mask=mask,
                                normalize=(normalize is not None))
