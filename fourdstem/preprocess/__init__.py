@@ -31,6 +31,7 @@ from .transform import (
     to_pattern,
     crop_detector,
     bin_detector,
+    bin_cube_detector,
     polar_transform,
 )
 
@@ -41,5 +42,6 @@ __all__ = [
     "center_of_mass", "friedel_correlation", "find_center_friedel", "find_center",
     "beam_stopper_mask", "bragg_peak_mask", "detect_bragg_peaks", "combine_masks",
     "disk_mask", "annular_mask", "wedge_mask",
-    "to_pattern", "crop_detector", "bin_detector", "polar_transform",
+    "to_pattern", "crop_detector", "bin_detector", "bin_cube_detector",
+    "polar_transform",
 ]

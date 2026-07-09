@@ -31,6 +31,19 @@ def test_mean_pattern_lazy_fallback(tmp_path):
     assert q_per_px == pytest.approx(0.02)
 
 
+def test_bin_cube_detector():
+    cube = np.arange(2 * 3 * 8 * 8, dtype=np.uint16).reshape(2, 3, 8, 8)
+    binned = fds.bin_cube_detector(cube, 4)
+    assert binned.shape == (2, 3, 2, 2)
+    # block-mean of the top-left 4x4 block of pattern [0,0]
+    assert binned[0, 0, 0, 0] == pytest.approx(cube[0, 0, :4, :4].mean())
+    # DataCube path scales q_per_px by the factor
+    dc = fds.from_array(cube, q_per_px=0.01)
+    dcb = fds.bin_cube_detector(dc, 4)
+    assert dcb.dp_shape == (2, 2)
+    assert dcb.calibration.q_per_px == pytest.approx(0.04)
+
+
 def test_to_pattern_preserves_dtype_and_mean():
     # 4D uint16 cube: to_pattern must accumulate in float64 without upcasting
     # the whole cube, and return the correct mean.

@@ -66,6 +66,41 @@ def bin_detector(img, factor):
     return img.reshape(Hc // factor, factor, Wc // factor, factor).mean((1, 3))
 
 
+def bin_cube_detector(data, factor):
+    """Bin the DETECTOR axes of a 3D/4D cube by an integer ``factor``.
+
+    Averages ``factor×factor`` blocks of the last two (detector) axes, leaving
+    the scan axes untouched. Cuts the per-pattern pixel count by ``factor²`` —
+    essential to fit a spatially-resolved NMF (one row per scan position) of a
+    multi-GB 4D cube in memory. Accepts a DataCube or an ndarray; returns the
+    same type.
+    """
+    from ..io.datacube import DataCube
+
+    is_cube = isinstance(data, DataCube)
+    arr = data.data if is_cube else np.asarray(data)
+    if arr.ndim not in (3, 4):
+        raise ValueError(f"bin_cube_detector needs 3D/4D, got {arr.ndim}D")
+    *scan, dy, dx = arr.shape
+    dy2, dx2 = (dy // factor) * factor, (dx // factor) * factor
+    arr = arr[..., :dy2, :dx2]
+    new_shape = (*scan, dy2 // factor, factor, dx2 // factor, factor)
+    binned = arr.reshape(new_shape).mean(axis=(-3, -1), dtype=np.float64)
+    if not is_cube:
+        return binned
+    from ..io.datacube import Calibration
+    cal = data.calibration
+    new_cal = Calibration(
+        q_per_px=None if cal.q_per_px is None else cal.q_per_px * factor,
+        r_per_px=cal.r_per_px, q_unit=cal.q_unit,
+        center=None if cal.center is None else (cal.center[0] / factor,
+                                                cal.center[1] / factor),
+        extra=dict(cal.extra),
+    )
+    return DataCube(binned, calibration=new_cal, metadata=dict(data.metadata),
+                    name=(data.name or "cube") + f"_bin{factor}")
+
+
 def polar_transform(img, center, n_r=None, n_theta=360, r_max=None, mask=None):
     """Resample a Cartesian pattern onto a polar grid ``(theta, r)``.
 

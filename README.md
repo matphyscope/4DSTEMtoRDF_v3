@@ -155,7 +155,8 @@ peaks = fds.detect_bragg_peaks(cube.max_dp(), center=fds.find_center(mean, stopp
 `notebooks/` 에 온도 시리즈 분석 2단계 워크플로가 있습니다(실데이터 없으면 합성 데모로 바로 실행됨):
 
 - **`01_preprocess_and_pdf.ipynb`** — 폴더(이름=온도) 불러오기 → 전처리 전/후(hot pixel·median·beam center) → PDF 변환 과정(I(q)→φ(q)→G(r)) → 온도별 `.npz` 저장
-- **`02_nmf_temperature_analysis.ipynb`** — `.npz` 불러오기 → G(r) 무지개 워터폴 → **NMF**(성분 2개, 수정 가능) → 성분별 온도 기여 → NMF 분율 vs 온도 → 1st peak(1.5–1.7 Å) 가우시안 피팅으로 위치 이동 측정
+- **`02_nmf_temperature_analysis.ipynb`** — `.npz` 불러오기 → G(r) 무지개 워터폴 → **PCA**(부호 있는 G(r) 시계열의 변동 모드; NMF는 음수 데이터에 부적합) → PC score vs 온도 → 1st peak 가우시안 피팅 → 차분맵 ΔG(r,T) → 2nd shell·FSDP 트렌드
+- **`03_phase_separation_nmf.ipynb`** — **벌크 vs 계면 공간 분리**: 각 온도의 4D 회절패턴에 **NMF**(비음수 → 정확) → 상별 회절패턴 + 실공간 abundance 지도 → 각 성분의 RDF(벌크/계면) → 온도별 계면 비율(계면 소멸 곡선). 큰 4D는 `bin_cube_detector`로 검출기 비닝해 메모리 절약.
 
 데이터 레이아웃은 두 가지 모두 자동 감지됩니다 — 폴더 안 평평한 파일(`0025K.dm4 … 1100K.dm4`,
 파일명=온도)이나 온도별 서브폴더(`300K/scan.dm4`) 어느 쪽이든 `Series.from_directory(경로)`로 로드됩니다.
