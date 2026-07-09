@@ -96,7 +96,29 @@ def _refold_loadings(W, scan_shape):
     return loads
 
 
-def nmf_decompose(cube, n_components=4, mask=None, max_iter=400,
+def _row_normalize(X, mode):
+    """Per-pattern (row) normalization to remove per-position intensity drift.
+
+    In a 4D-STEM scan the total counts per position vary (dose, thickness,
+    beam-current / scan-line drift). Without normalization a decomposition
+    separates patterns by BRIGHTNESS (often showing up as scan-line stripes in
+    the loading maps) instead of by STRUCTURE. Dividing each pattern by its
+    integrated intensity makes the factorization compare shapes.
+    """
+    if mode in (None, False):
+        return X
+    if mode in ("sum", True):
+        s = X.sum(axis=1, keepdims=True)
+    elif mode == "mean":
+        s = X.mean(axis=1, keepdims=True)
+    elif mode == "l2":
+        s = np.sqrt((X * X).sum(axis=1, keepdims=True))
+    else:
+        raise ValueError(f"unknown normalize mode {mode!r}")
+    return X / np.where(s > 0, s, 1.0)
+
+
+def nmf_decompose(cube, n_components=4, mask=None, normalize=None, max_iter=400,
                   init="nndsvda", random_state=0, **kwargs):
     """Non-negative matrix factorization of a cube.
 
@@ -106,7 +128,13 @@ def nmf_decompose(cube, n_components=4, mask=None, max_iter=400,
     n_components : int
         Number of components ``k``.
     mask : 2D bool array, optional
-        Detector pixels to exclude (``True`` = drop), e.g. a beam-stop mask.
+        Detector pixels to exclude (``True`` = drop), e.g. a beam-stop + central
+        beam mask. Excluded pixels also don't count toward ``normalize``.
+    normalize : {None, "sum", "mean", "l2"}
+        Per-pattern normalization BEFORE factorization. Use ``"sum"`` to separate
+        by structure rather than brightness (removes scan-line intensity drift).
+        Pair with a mask that hides the central beam so the normalization
+        reflects the structural (scattered) intensity.
     max_iter, init, random_state, **kwargs
         Passed to :class:`sklearn.decomposition.NMF`.
 
@@ -118,6 +146,7 @@ def nmf_decompose(cube, n_components=4, mask=None, max_iter=400,
 
     X, dp_shape, scan_shape, keep = _unfold(cube, mask)
     X = np.clip(X, 0, None)  # NMF requires non-negativity
+    X = _row_normalize(X, normalize)
     model = NMF(n_components=n_components, init=init, max_iter=max_iter,
                 random_state=random_state, **kwargs)
     W = model.fit_transform(X)
@@ -130,18 +159,21 @@ def nmf_decompose(cube, n_components=4, mask=None, max_iter=400,
     )
 
 
-def pca_decompose(cube, n_components=8, mask=None, whiten=False,
+def pca_decompose(cube, n_components=8, mask=None, normalize=None, whiten=False,
                   random_state=0, **kwargs):
     """Principal component analysis of a cube (denoising / rank estimation).
 
     Returns a :class:`DecompositionResult` whose ``components`` are the principal
     diffraction patterns and ``loadings`` the score maps. Mean-centering is done
     by scikit-learn internally; the subtracted mean is available on
-    ``result.model.mean_``.
+    ``result.model.mean_``. ``normalize`` (see :func:`nmf_decompose`) divides
+    each pattern by its intensity first, so PCA finds structural (not brightness)
+    variation.
     """
     from sklearn.decomposition import PCA
 
     X, dp_shape, scan_shape, keep = _unfold(cube, mask)
+    X = _row_normalize(X, normalize)
     model = PCA(n_components=n_components, whiten=whiten,
                 random_state=random_state, **kwargs)
     W = model.fit_transform(X)

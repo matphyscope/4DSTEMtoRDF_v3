@@ -204,6 +204,30 @@ def test_reduction_phi_bounded_with_real_factors():
 
 
 # -- decomposition (needs sklearn) -----------------------------------------
+def test_nmf_normalize_separates_by_structure():
+    pytest.importorskip("sklearn")
+    # two structures (ring at r=8 vs r=13) but with a strong per-position
+    # BRIGHTNESS gradient. Without normalize, NMF splits by brightness; with
+    # normalize="sum" it must split by structure (the two rings).
+    from tests.synthetic import ring_pattern
+    a = ring_pattern((48, 48), rings=((8, 3, 1.0),), central_beam=0)
+    b = ring_pattern((48, 48), rings=((13, 3, 1.0),), central_beam=0)
+    Ry, Rx = 6, 8
+    cube = np.empty((Ry, Rx, 48, 48))
+    for iy in range(Ry):
+        for ix in range(Rx):
+            bright = 1.0 + 5.0 * ix / Rx           # brightness ramp across x
+            cube[iy, ix] = bright * (a if ix < Rx // 2 else b)
+    dc = fds.from_array(cube, q_per_px=1.0)
+    res = fds.nmf_decompose(dc, n_components=2, normalize="sum")
+    # each component's loading map should be dominated by one half (structure),
+    # not follow the brightness ramp. Column means of the two loadings should
+    # anti-correlate (one high on left half, other on right half).
+    m0 = res.loadings[0].mean(0)
+    m1 = res.loadings[1].mean(0)
+    assert np.corrcoef(m0, m1)[0, 1] < 0     # complementary structural maps
+
+
 def test_nmf_separates_amorphous_and_crystalline():
     pytest.importorskip("sklearn")
     cube = fds.from_array(scan_cube((6, 6), (64, 64)), q_per_px=0.02)
