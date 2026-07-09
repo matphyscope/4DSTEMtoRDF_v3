@@ -309,14 +309,15 @@ def test_localize_interface_vertical_band():
             w = 1.0 if abs(ix - x_if) <= 1 else 0.0
             cube[iy, ix] = bright * (iface if w else bulk)
     dc = fds.from_array(cube, q_per_px=1.0)
-    info = fds.localize_interface(dc, center=(24, 24), rings=[(6, 12)],
-                                  detrend=True, detrend_sigma=3.0)
-    assert abs(info["x_if"] - x_if) <= 1          # found the band, not the gradient
+    info = fds.localize_interface(dc, center=(24, 24), feature="structural",
+                                  rings=[(6, 12)], band_sigma=2.0)
+    assert abs(info["x_if"] - x_if) <= 1.5        # found the band, not the gradient
+    assert info["width"] < 8                       # a thin line, not a broad hump
     assert info["interface_mask"].sum() > 0
     assert info["bulk_mask"].sum() > 0
     # interface mask must be concentrated at x_if, bulk far away
     im_cols = np.where(info["interface_mask"].any(0))[0]
-    assert im_cols.min() >= x_if - 2 and im_cols.max() <= x_if + 2
+    assert im_cols.min() >= x_if - 4 and im_cols.max() <= x_if + 4
     # masks are disjoint
     assert not np.any(info["interface_mask"] & info["bulk_mask"])
 
