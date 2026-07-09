@@ -103,6 +103,24 @@ def test_detect_bragg_peaks_positions():
     assert np.median(qs) == pytest.approx(45 * 0.02, abs=0.05)
 
 
+def test_structural_map_cancels_brightness():
+    # 4D: left half ring at r=8, right half ring at r=13; a per-position
+    # brightness ramp. structural_map (ring/total) should reveal the structural
+    # left/right split, not the brightness ramp.
+    from tests.synthetic import ring_pattern
+    a = ring_pattern((48, 48), rings=((8, 2, 1.0),), central_beam=2)
+    b = ring_pattern((48, 48), rings=((13, 2, 1.0),), central_beam=2)
+    Ry, Rx = 5, 8
+    cube = np.empty((Ry, Rx, 48, 48))
+    for iy in range(Ry):
+        for ix in range(Rx):
+            cube[iy, ix] = (1 + 4 * ix / Rx) * (a if ix < Rx // 2 else b)
+    dc = fds.from_array(cube, q_per_px=1.0)
+    smap = fds.structural_map(dc, center=(24, 24), r_inner=6, r_outer=10)
+    # inner-ring (r=8) intensity dominates the left half -> higher structural value
+    assert smap[:, :Rx // 2].mean() > smap[:, Rx // 2:].mean()
+
+
 def test_virtual_detector_masks():
     shape = (64, 64)
     center = (32, 32)

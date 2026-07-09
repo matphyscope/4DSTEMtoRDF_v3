@@ -43,6 +43,33 @@ def annular_dark_field(cube, center=None, r_inner=None, r_outer=None):
     return cube.get_virtual_image(annular_mask(dp, center, r_inner, r_outer))
 
 
+def structural_map(cube, center=None, r_inner=None, r_outer=None,
+                   norm_inner=None, norm_outer=None):
+    """Brightness-normalized structural virtual image: ring-DF / total.
+
+    Integrates a structural annulus (``r_inner..r_outer``, e.g. the amorphous
+    ring / FSDP) and divides by the total structural intensity at each scan
+    position. This CANCELS per-position brightness variation (dose, thickness,
+    scan-line drift — which otherwise show as horizontal stripes) and leaves the
+    *structural* contrast, so a phase/interface with different scattering shows
+    up as a real-space feature (e.g. a band). Returns a map over the scan grid.
+    """
+    center = _resolve_center(cube, center)
+    dp = cube.dp_shape
+    if r_inner is None:
+        r_inner = min(dp) / 5.0
+    if r_outer is None:
+        r_outer = min(dp) / 3.0
+    if norm_inner is None:
+        norm_inner = min(dp) / 12.0
+    if norm_outer is None:
+        norm_outer = min(dp) / 2.0
+    ring = cube.get_virtual_image(annular_mask(dp, center, r_inner, r_outer))
+    total = cube.get_virtual_image(annular_mask(dp, center, norm_inner, norm_outer))
+    total = np.where(np.asarray(total) > 0, total, 1.0)
+    return np.asarray(ring) / total
+
+
 def center_of_mass_map(cube, center=None, mask=None, normalize=True):
     """Per-scan-position center-of-mass of the diffraction pattern (DPC).
 
