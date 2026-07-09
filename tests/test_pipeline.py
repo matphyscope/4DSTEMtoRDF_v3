@@ -322,6 +322,32 @@ def test_localize_interface_vertical_band():
     assert not np.any(info["interface_mask"] & info["bulk_mask"])
 
 
+def test_localize_interface_per_row_rejects_edges():
+    from tests.synthetic import ring_pattern
+    bulk = ring_pattern((48, 48), rings=((10, 3, 1.0),), central_beam=0)
+    iface = ring_pattern((48, 48), rings=((8, 3, 1.0),), central_beam=0)
+    Sy, Sx = 16, 40
+    x_if = 22
+    cube = np.empty((Sy, Sx, 48, 48))
+    for iy in range(Sy):
+        for ix in range(Sx):
+            bright = 1.0 + 2.0 * iy / Sy               # horizontal striping
+            w = 1.0 if abs(ix - x_if) <= 1 else 0.0
+            cube[iy, ix] = bright * (iface if w else bulk)
+            if ix in (0, Sx - 1):                      # strong edge artifact
+                cube[iy, ix] = 5.0 * bulk
+    dc = fds.from_array(cube, q_per_px=1.0)
+    info = fds.localize_interface(dc, center=(24, 24), feature="structural",
+                                  rings=[(6, 12)], per_row=True)
+    assert abs(info["x_if"] - x_if) <= 2               # not the edge spike
+    im = info["interface_mask"]
+    cols = np.where(im.any(0))[0]
+    assert cols.min() >= x_if - 4 and cols.max() <= x_if + 4   # band near the line
+    assert 0 not in cols and (Sx - 1) not in cols      # edges excluded
+    assert info["interface_area"] == int(im.sum())
+    assert not np.any(im & info["bulk_mask"])
+
+
 def test_rdf_quality_report():
     q = np.linspace(0.05, 1.6, 400)
     f_sq, f_avg_sq = fds.scattering_terms(q, {"Si": 1, "O": 2})

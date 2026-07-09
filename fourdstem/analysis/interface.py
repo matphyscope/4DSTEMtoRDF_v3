@@ -77,11 +77,39 @@ def _line_profile(work, row_detrend, smooth, broad_win):
     return p - _rolling_median(p, broad_win)                   # high-pass
 
 
+def _row_signals(work, sign, smooth, broad_win, row_detrend):
+    """Per-row horizontal profiles, high-pass detrended and sign-corrected so the
+    interface is a positive peak in every row (rows = axis 0, x = axis 1)."""
+    Sy, Sx = work.shape
+    if row_detrend:
+        work = work - np.median(work, axis=1, keepdims=True)
+    bw = broad_win or max(11, (Sx // 4) | 1)
+    R = np.empty_like(work, float)
+    for y in range(Sy):
+        row = _smooth1d(work[y], smooth)
+        R[y] = sign * (row - _rolling_median(row, bw))
+    return R
+
+
+def _half_max_band(row, pk, floor):
+    """Half-maximum crossings of a single-row profile around peak index ``pk``."""
+    n = row.size
+    half = floor + 0.5 * (row[pk] - floor)
+    l = pk
+    while l > 0 and row[l - 1] >= half:
+        l -= 1
+    r = pk
+    while r < n - 1 and row[r + 1] >= half:
+        r += 1
+    return l, r
+
+
 def localize_interface(cube, center=None, feature="bf", rings=None,
                        bf_radius=None, axis="vertical", row_detrend=True,
                        smooth=3, broad_win=None, line_sign="auto",
                        fit_halfwidth=8, band_sigma=2.0, bulk_gap=3.0,
-                       min_width=1.0, per_row=False, search_halfwidth=None):
+                       min_width=1.0, per_row=False, search_halfwidth=None,
+                       edge_margin=None, prominence_frac=0.35):
     """Locate a thin interface line and split the scan into interface / bulk — no ML.
 
     Parameters
@@ -120,10 +148,21 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
     min_width : float
         Floor on the reported width / band half-width (px).
     per_row : bool
-        Localize the line per row (tilt-robust) within ``search_halfwidth`` of
-        the global center.
+        Localize the interface with a **horizontal line profile per row**: track
+        the peak near the running (connected) center, measure its **half-max
+        (FWHM) band**, and take the union of the per-row bands as the interface
+        AREA. Rows whose peak is not prominent enough (``prominence_frac``) are
+        dropped, so only the CONTINUOUS line contributes. Handles tilt and a
+        temperature-varying width; ``width`` is then the median per-row FWHM.
     search_halfwidth : int, optional
-        Per-row search half-window (px).
+        Per-row tracking half-window (px) around the running center.
+    edge_margin : int, optional
+        Columns to ignore at each x-edge when detecting the line — suppresses
+        rolling-median/high-pass boundary spikes that otherwise capture the
+        localizer at the scan border. Default ``~Sx/20``.
+    prominence_frac : float
+        Per-row connectivity gate: keep a row only if its peak prominence is at
+        least this fraction of the median row prominence.
 
     Returns
     -------
@@ -142,49 +181,85 @@ def localize_interface(cube, center=None, feature="bf", rings=None,
 
     work = s.T if axis == "horizontal" else s      # line now varies along axis 1
     Sy, Sx = work.shape
+    if edge_margin is None:
+        edge_margin = max(3, Sx // 20)              # ignore boundary artifacts
+    m0, m1 = int(edge_margin), int(Sx - edge_margin)
 
     prof = _line_profile(work, row_detrend, smooth, broad_win)
     if line_sign == "auto":
-        sign = -1.0 if abs(prof.min()) >= abs(prof.max()) else 1.0
+        core = prof[m0:m1]                          # decide sign away from edges
+        sign = -1.0 if abs(core.min()) >= abs(core.max()) else 1.0
     else:
         sign = -1.0 if str(line_sign).lower() in ("dark", "dip", "neg", "-") else 1.0
     sp = sign * prof                                # interface is now a peak
-    x0 = int(np.argmax(sp))
+    x0 = m0 + int(np.argmax(sp[m0:m1]))             # global center, edges excluded
     xs = np.arange(Sx, dtype=float)
 
-    g = fit_gaussian_peak(xs, sp, max(0, x0 - fit_halfwidth),
-                          min(Sx - 1, x0 + fit_halfwidth))
+    g = fit_gaussian_peak(xs, sp, max(m0, x0 - fit_halfwidth),
+                          min(m1 - 1, x0 + fit_halfwidth))
     if g["success"] and np.isfinite(g["center"]) and abs(g["center"] - x0) <= fit_halfwidth:
         x_if = float(g["center"])
         sigma = float(max(g["sigma"], 0.5))
     else:
         x_if = float(x0)
         sigma = 1.0
-    width = float(max(min_width, 2.3548 * sigma))
     contrast = float(sp[x0])
 
-    if per_row:
-        hw = int(search_halfwidth or max(3, round(3 * sigma)))
-        line = np.empty(Sy, float)
-        base = work - np.median(work, axis=1, keepdims=True) if row_detrend else work
-        for y in range(Sy):
-            row = sign * (_smooth1d(base[y], smooth)
-                          - _rolling_median(_smooth1d(base[y], smooth),
-                                            broad_win or max(11, (Sx // 4) | 1)))
-            lo, hi = max(0, int(x_if) - hw), min(Sx, int(x_if) + hw + 1)
-            line[y] = lo + int(np.argmax(row[lo:hi]))
-        line = _smooth1d(line, 3)
-    else:
-        line = np.full(Sy, x_if, float)
-
     cols = np.arange(Sx)[None, :]
-    dmap = np.abs(cols - line[:, None])
 
-    half_w = max(min_width, band_sigma * sigma)
-    interface_mask = dmap <= half_w
-    bulk_mask = dmap >= max(bulk_gap * sigma, half_w + 1.0)
+    if per_row:
+        # Horizontal per-row line profiles. In each row track the interface peak
+        # near the (connected) running center, measure its half-max band, and
+        # gate weak rows so only the CONTINUOUS line becomes area.
+        R = _row_signals(work, sign, smooth, broad_win, row_detrend)
+        hw = int(search_halfwidth or max(4, round(4 * sigma)))
+        centers = np.full(Sy, x_if)
+        proms = np.zeros(Sy)
+        bands = [None] * Sy
+        track = x_if
+        for y in range(Sy):
+            lo = max(m0, int(round(track)) - hw)
+            hi = min(m1, int(round(track)) + hw + 1)
+            if hi - lo < 3:
+                lo, hi = m0, m1
+            seg = R[y, lo:hi]
+            pk = lo + int(np.argmax(seg))
+            floor = float(np.median(R[y, m0:m1]))
+            proms[y] = R[y, pk] - floor
+            centers[y] = pk
+            bands[y] = _half_max_band(R[y], pk, floor)
+            track = 0.5 * track + 0.5 * pk           # connectivity: follow the line
+        # connectivity gate: keep rows whose peak is prominent vs the median
+        ref = np.median(proms[proms > 0]) if np.any(proms > 0) else 0.0
+        good = proms >= max(prominence_frac * ref, 1e-9)
+        # smooth the kept centers; interpolate the line across gaps for display
+        line = centers.astype(float)
+        if good.any():
+            yy = np.arange(Sy)
+            line = np.interp(yy, yy[good], _smooth1d(centers[good].astype(float), 3))
+        interface_mask = np.zeros((Sy, Sx), bool)
+        fwhms = []
+        for y in range(Sy):
+            if not good[y]:
+                continue
+            l, r = bands[y]
+            l = max(m0, min(l, Sx - 1)); r = max(l, min(r, Sx - 1))
+            interface_mask[y, l:r + 1] = True
+            fwhms.append(r - l + 1)
+        width = float(np.median(fwhms)) if fwhms else float(max(min_width, 2.3548 * sigma))
+        dmap = np.abs(cols - line[:, None])
+        sig_eff = max(width / 2.3548, sigma)
+        bulk_mask = (dmap >= max(bulk_gap * sig_eff, width / 2 + 2.0)) & ~interface_mask
+    else:
+        width = float(max(min_width, 2.3548 * sigma))
+        line = np.full(Sy, x_if, float)
+        dmap = np.abs(cols - line[:, None])
+        half_w = max(min_width, band_sigma * sigma)
+        interface_mask = dmap <= half_w
+        bulk_mask = dmap >= max(bulk_gap * sigma, half_w + 1.0)
+
     if bulk_mask.sum() < 5:                          # keep a real bulk set
-        bulk_mask = dmap >= np.percentile(dmap, 60)
+        bulk_mask = (dmap >= np.percentile(dmap, 60)) & ~interface_mask
 
     if axis == "horizontal":                         # undo transpose for outputs
         dmap = dmap.T
