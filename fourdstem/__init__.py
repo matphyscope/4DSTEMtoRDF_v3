@@ -54,15 +54,15 @@ from .preprocess import (
 
 # -- analysis ---------------------------------------------------------------
 from .analysis import (
-    azimuthal_integrate, azimuthal_variance,
+    azimuthal_integrate, azimuthal_variance, radial_profiles,
     virtual_image, bright_field, annular_dark_field, center_of_mass_map,
     structural_map, average_pattern,
     find_peaks_1d, refine_peak_parabolic, first_peak_position, peak_centroid,
     fit_gaussian_peak,
     DecompositionResult, ProfileDecomposition, nmf_decompose, pca_decompose,
-    decompose_profiles, reconstruct,
+    decompose_profiles, cluster_cube, reconstruct,
     RDFConfig, RDFResult, scattering_terms, damping_window, sine_ft,
-    reduce_intensity, pattern_to_rdf, save_rdf, load_rdf,
+    reduce_intensity, pattern_to_rdf, save_rdf, load_rdf, rdf_quality,
 )
 
 # -- insitu -----------------------------------------------------------------
@@ -96,13 +96,13 @@ __all__ = [
     "wedge_mask", "to_pattern", "crop_detector", "bin_detector",
     "bin_cube_detector", "polar_transform",
     # analysis
-    "azimuthal_integrate", "azimuthal_variance", "virtual_image", "bright_field",
+    "azimuthal_integrate", "azimuthal_variance", "radial_profiles", "virtual_image", "bright_field",
     "annular_dark_field", "center_of_mass_map", "structural_map", "average_pattern", "find_peaks_1d",
     "refine_peak_parabolic", "first_peak_position", "peak_centroid",
     "fit_gaussian_peak", "DecompositionResult", "ProfileDecomposition",
-    "nmf_decompose", "pca_decompose", "decompose_profiles", "reconstruct",
+    "nmf_decompose", "pca_decompose", "decompose_profiles", "cluster_cube", "reconstruct",
     "RDFConfig", "RDFResult", "scattering_terms", "damping_window", "sine_ft",
-    "reduce_intensity", "pattern_to_rdf", "save_rdf", "load_rdf",
+    "reduce_intensity", "pattern_to_rdf", "save_rdf", "load_rdf", "rdf_quality",
     # insitu
     "Series", "Frame", "coordinate_from_name", "track_peak",
     "track_multiple_peaks", "integrate_region",

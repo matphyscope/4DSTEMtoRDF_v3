@@ -233,6 +233,55 @@ def test_reduction_phi_bounded_with_real_factors():
 
 
 # -- decomposition (needs sklearn) -----------------------------------------
+def test_radial_profiles_shape_and_ring():
+    from tests.synthetic import ring_pattern
+    cube = np.stack([[ring_pattern((48, 48), rings=((r, 3, 1.0),), central_beam=0)
+                      for r in (8, 16)]], 0)  # (1, 2, 48, 48)
+    dc = fds.from_array(cube, q_per_px=1.0)
+    prof, rc = fds.radial_profiles(dc, center=(24, 24), n_bins=24)
+    assert prof.shape == (2, 24)
+    # position 0 peaks near r=8, position 1 near r=16
+    assert abs(rc[np.argmax(prof[0])] - 8) < 3
+    assert abs(rc[np.argmax(prof[1])] - 16) < 3
+
+
+def test_cluster_cube_two_phases():
+    pytest.importorskip("sklearn")
+    from tests.synthetic import ring_pattern
+    a = ring_pattern((48, 48), rings=((8, 3, 1.0),), central_beam=0)
+    b = ring_pattern((48, 48), rings=((16, 3, 1.0),), central_beam=0)
+    Ry, Rx = 6, 8
+    cube = np.empty((Ry, Rx, 48, 48))
+    for iy in range(Ry):
+        for ix in range(Rx):
+            cube[iy, ix] = (1 + 3 * ix / Rx) * (a if ix < Rx // 2 else b)  # + brightness ramp
+    dc = fds.from_array(cube, q_per_px=1.0)
+    labels, patterns, km = fds.cluster_cube(dc, n_clusters=2, center=(24, 24),
+                                            feature="radial", normalize="sum")
+    assert labels.shape == (Ry, Rx)
+    assert patterns.shape == (2, 48, 48)
+    # each column should be a single cluster (structure, not brightness ramp)
+    left = labels[:, :Rx // 2].ravel()
+    right = labels[:, Rx // 2:].ravel()
+    assert len(set(left)) == 1 and len(set(right)) == 1 and left[0] != right[0]
+
+
+def test_rdf_quality_report():
+    q = np.linspace(0.05, 1.6, 400)
+    f_sq, f_avg_sq = fds.scattering_terms(q, {"Si": 1, "O": 2})
+    struct = 0.35 * np.sin(2 * np.pi * q / 0.24) * np.exp(-0.8 * q)
+    Iq = 120.0 * (f_sq + f_avg_sq * struct)
+    cfg = fds.RDFConfig(composition={"Si": 1, "O": 2}, q_int_min=0.15,
+                        q_int_max=1.5, r_min=1.1, r_max=8.0)
+    qf, phi, r, Gr, diag = fds.reduce_intensity(q, Iq, cfg)
+    res = fds.RDFResult(q=q, Iq=Iq, q_reduced=qf, phi=phi, r=r, Gr=Gr,
+                        N=diag["N"], diagnostics=diag)
+    rep = fds.rdf_quality(res, expected_first_peak=1.0)
+    assert "verdict" in rep and set(rep["flags"]) == {
+        "first_peak_ok", "phi_not_ramping", "low_r_clean"}
+    assert rep["flags"]["phi_not_ramping"]     # phi is bounded here
+
+
 def test_nmf_normalize_separates_by_structure():
     pytest.importorskip("sklearn")
     # two structures (ring at r=8 vs r=13) but with a strong per-position

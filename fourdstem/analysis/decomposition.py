@@ -187,6 +187,50 @@ def pca_decompose(cube, n_components=8, mask=None, normalize=None, whiten=False,
     )
 
 
+def cluster_cube(cube, n_clusters=2, center=None, mask=None, feature="radial",
+                 n_bins=None, normalize="sum", random_state=0):
+    """k-means cluster scan positions into phases (hard assignment, no threshold).
+
+    Each scan position is assigned to exactly one cluster from its diffraction
+    *pattern*, so region boundaries follow the data instead of a scalar cutoff
+    that bleeds across boundaries. Returns ``(label_map, cluster_patterns, model)``:
+
+    * ``label_map`` — cluster index at each scan position (scan-shaped)
+    * ``cluster_patterns`` — ``(n_clusters, Qy, Qx)`` mean diffraction pattern of
+      each cluster (feed to ``pattern_to_rdf`` for a per-phase RDF)
+    * ``model`` — the fitted KMeans
+
+    ``feature="radial"`` clusters on per-position I(q) (denoised, recommended);
+    ``"pixel"`` clusters on the raw masked pixels. ``normalize`` removes
+    per-position brightness so clusters reflect structure.
+    """
+    from sklearn.cluster import KMeans
+
+    if center is None:
+        from ..preprocess.center import find_center
+        from ..preprocess.masks import beam_stopper_mask
+        md = cube.mean_dp()
+        center, _ = find_center(md, beam_stopper_mask(md))
+
+    if feature == "radial":
+        from .azimuthal import radial_profiles
+        X, _ = radial_profiles(cube, center, n_bins=n_bins, mask=mask,
+                               normalize=(normalize is not None))
+    else:
+        X, dp_shape, scan_shape, keep = _unfold(cube, mask)
+        X = _row_normalize(np.clip(X, 0, None), normalize)
+
+    km = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
+    labels = km.fit_predict(np.nan_to_num(X, nan=0.0))
+
+    scan_shape = cube.scan_shape
+    label_map = labels.reshape(scan_shape) if scan_shape else labels
+    flat = cube._flat_patterns()
+    patterns = np.stack([flat[labels == k].mean(0) if np.any(labels == k)
+                         else np.zeros(cube.dp_shape) for k in range(n_clusters)])
+    return label_map, patterns, km
+
+
 @dataclass
 class ProfileDecomposition:
     """Decomposition of a stack of 1D profiles (e.g. G(r) vs temperature).

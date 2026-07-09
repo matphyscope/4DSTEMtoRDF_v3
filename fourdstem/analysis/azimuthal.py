@@ -68,6 +68,41 @@ def azimuthal_integrate(img, center, q_per_px, mask=None, q_grid=None,
     return qc, Iq[1:len(q_grid)]
 
 
+def radial_profiles(cube, center, n_bins=None, mask=None, normalize=False):
+    """Per-scan-position radial intensity I(q) — one profile per position.
+
+    Returns ``(profiles, r_centers)`` where ``profiles`` has shape
+    ``(n_position, n_bins)``. Azimuthal averaging denoises each pattern into a
+    compact structural feature vector — ideal input for clustering (phase
+    mapping) or per-position structural metrics, far more robust than raw pixels.
+    ``normalize=True`` scales each profile to unit sum (compare shape, not dose).
+    """
+    dp = cube.dp_shape
+    flat = cube._flat_patterns()
+    n_pos = flat.shape[0]
+    r = radial_coordinate(dp, center)
+    cx, cy = center
+    rmax = min(cx, cy, dp[1] - cx, dp[0] - cy)
+    if n_bins is None:
+        n_bins = int(max(8, rmax))
+    edges = np.linspace(0, rmax, n_bins + 1)
+    idx = np.digitize(r.ravel(), edges) - 1
+    keep = (idx >= 0) & (idx < n_bins)
+    if mask is not None:
+        keep &= ~np.asarray(mask, bool).ravel()
+    idx_k = idx[keep]
+    F = flat.reshape(n_pos, -1)[:, keep].astype(np.float64)
+    prof = np.zeros((n_pos, n_bins))
+    for b in range(n_bins):
+        sel = idx_k == b
+        if sel.any():
+            prof[:, b] = F[:, sel].mean(1)
+    if normalize:
+        s = prof.sum(1, keepdims=True)
+        prof = prof / np.where(s > 0, s, 1.0)
+    return prof, 0.5 * (edges[:-1] + edges[1:])
+
+
 def azimuthal_variance(img, center, q_per_px, mask=None, q_grid=None):
     """Per-ring variance normalized by the ring mean squared: ``var(I)/mean(I)²``.
 

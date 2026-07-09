@@ -307,3 +307,51 @@ def load_rdf(path):
     """Load an .npz written by :func:`save_rdf` into a plain dict of arrays."""
     from ..io.writers import load_result_npz
     return load_result_npz(path)
+
+
+def rdf_quality(result, expected_first_peak=1.61, first_win=(1.45, 1.85)):
+    """Objective reduction-quality metrics for an :class:`RDFResult`.
+
+    Returns a dict of numbers + boolean ``flags`` and a human ``verdict``. There
+    is no curve "fit" — the reduction fits one scale N to flatten the low-r
+    region — so quality means: is the low-r region flat, does φ(q) oscillate
+    around 0 without ramping, and does the first peak land where expected?
+
+    Metrics
+    -------
+    first_peak_r / first_peak_offset : G(r) first-shell position and its offset
+        from ``expected_first_peak`` (Å).
+    low_r_rms : straight-line residual of G(r) below r_min (self-consistency;
+        lower is better).
+    phi_lowr_slope_ok : whether G(r) below the first bond has no positive bump.
+    phi_highq_abs : mean |φ| in the top q-decile (should be small; a large value
+        means φ ramps → bad scattering factors / calibration).
+    qmax : maximum q used (Å⁻¹, q=1/d) — sets the real-space resolution.
+    """
+    from .peaks import first_peak_position
+
+    r = np.asarray(result.r); Gr = np.asarray(result.Gr)
+    q = np.asarray(result.q_reduced); phi = np.asarray(result.phi)
+    r1, _ = first_peak_position(r, Gr, *first_win)
+    low_r_rms = float(result.diagnostics.get("sub_rmin_rms", np.nan))
+    # a "ramp" is a signed high-q DRIFT away from 0 (φ should oscillate about 0),
+    # measured relative to the oscillation amplitude — not just a large |φ|.
+    hi = q >= np.percentile(q, 85)
+    phi_std = float(np.nanstd(phi)) + 1e-9
+    phi_drift = float(np.nanmean(phi[hi]) / phi_std) if hi.any() else float("nan")
+    qmax = float(np.nanmax(q)) if q.size else float("nan")
+    # low-r spurious positive bump (below ~1.0 Å there should be none)
+    sub = r < min(1.0, first_win[0] - 0.3)
+    bump = float(np.nanmax(Gr[sub])) if sub.any() else 0.0
+    peak_h = float(np.nanmax(Gr[(r >= first_win[0]) & (r <= first_win[1])]) or 1.0)
+    flags = {
+        "first_peak_ok": abs(r1 - expected_first_peak) < 0.15,
+        "phi_not_ramping": abs(phi_drift) < 1.5,
+        "low_r_clean": bump < 0.25 * abs(peak_h),
+    }
+    verdict = "good" if all(flags.values()) else "check"
+    return dict(first_peak_r=float(r1),
+                first_peak_offset=float(r1 - expected_first_peak),
+                low_r_rms=low_r_rms, phi_highq_drift=phi_drift, qmax=qmax,
+                low_r_bump_frac=float(bump / abs(peak_h)), N=float(result.N),
+                flags=flags, verdict=verdict)
