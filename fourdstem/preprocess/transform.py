@@ -42,6 +42,34 @@ def to_pattern(data, roi=None):
     raise ValueError(f"unexpected data ndim={data.ndim}")
 
 
+def median_pattern(data, roi=None):
+    """Median diffraction pattern over all scan positions.
+
+    Unlike :func:`to_pattern` (mean), the per-pixel median rejects outliers —
+    X-ray hits, hot frames, occasional Bragg spots from stray crystallites — so
+    it is the robust "typical" NBED pattern for an amorphous scan. Computed
+    detector-row by detector-row to keep peak memory to one ``(n_pos, Qx)``
+    slice instead of sorting the whole cube at once.
+
+    Accepts a DataCube or a raw 3D/4D ndarray. ``roi=(y0,y1,x0,x1)`` restricts a
+    4D scan first.
+    """
+    if isinstance(data, DataCube):
+        flat = data.roi(*roi)._flat_patterns() if (roi is not None and data.ndim == 4) \
+            else data._flat_patterns()
+    else:
+        arr = np.asarray(data)
+        if arr.ndim == 4 and roi is not None:
+            y0, y1, x0, x1 = roi
+            arr = arr[y0:y1, x0:x1]
+        flat = arr.reshape(-1, *arr.shape[-2:])
+    n, Qy, Qx = flat.shape
+    out = np.empty((Qy, Qx), np.float64)
+    for y in range(Qy):
+        out[y] = np.median(np.asarray(flat[:, y, :], np.float64), axis=0)
+    return out
+
+
 def crop_detector(img, center, half_size):
     """Crop a square window of half-width ``half_size`` around ``center``.
 

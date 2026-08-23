@@ -49,7 +49,8 @@ from .preprocess import (
     center_of_mass, friedel_correlation, find_center_friedel, find_center,
     beam_stopper_mask, bragg_peak_mask, detect_bragg_peaks, combine_masks,
     disk_mask, annular_mask, wedge_mask,
-    to_pattern, crop_detector, bin_detector, bin_cube_detector, polar_transform,
+    to_pattern, median_pattern, crop_detector, bin_detector, bin_cube_detector,
+    polar_transform,
 )
 
 # -- analysis ---------------------------------------------------------------
@@ -62,7 +63,8 @@ from .analysis import (
     DecompositionResult, ProfileDecomposition, nmf_decompose, pca_decompose,
     decompose_profiles, cluster_cube, reconstruct, localize_interface,
     RDFConfig, RDFResult, scattering_terms, damping_window, sine_ft,
-    reduce_intensity, pattern_to_rdf, save_rdf, load_rdf, rdf_quality,
+    reduce_intensity, reduce_profiles, pattern_to_rdf, save_rdf, load_rdf,
+    rdf_quality,
 )
 
 # -- insitu -----------------------------------------------------------------
@@ -93,8 +95,8 @@ __all__ = [
     "median_denoise", "clean_pattern", "center_of_mass", "friedel_correlation",
     "find_center_friedel", "find_center", "beam_stopper_mask", "bragg_peak_mask",
     "detect_bragg_peaks", "combine_masks", "disk_mask", "annular_mask",
-    "wedge_mask", "to_pattern", "crop_detector", "bin_detector",
-    "bin_cube_detector", "polar_transform",
+    "wedge_mask", "to_pattern", "median_pattern", "crop_detector",
+    "bin_detector", "bin_cube_detector", "polar_transform",
     # analysis
     "azimuthal_integrate", "azimuthal_variance", "radial_profiles", "virtual_image", "bright_field",
     "annular_dark_field", "center_of_mass_map", "structural_map", "average_pattern", "find_peaks_1d",
@@ -103,7 +105,8 @@ __all__ = [
     "nmf_decompose", "pca_decompose", "decompose_profiles", "cluster_cube", "reconstruct",
     "localize_interface",
     "RDFConfig", "RDFResult", "scattering_terms", "damping_window", "sine_ft",
-    "reduce_intensity", "pattern_to_rdf", "save_rdf", "load_rdf", "rdf_quality",
+    "reduce_intensity", "reduce_profiles", "pattern_to_rdf", "save_rdf",
+    "load_rdf", "rdf_quality",
     # insitu
     "Series", "Frame", "coordinate_from_name", "track_peak",
     "track_multiple_peaks", "integrate_region",

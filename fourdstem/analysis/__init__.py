@@ -32,6 +32,7 @@ from .rdf import (
     damping_window,
     sine_ft,
     reduce_intensity,
+    reduce_profiles,
     pattern_to_rdf,
     save_rdf,
     load_rdf,
@@ -46,5 +47,6 @@ __all__ = [
     "DecompositionResult", "ProfileDecomposition", "nmf_decompose", "pca_decompose",
     "decompose_profiles", "cluster_cube", "reconstruct", "localize_interface",
     "RDFConfig", "RDFResult", "scattering_terms", "damping_window", "sine_ft",
-    "reduce_intensity", "pattern_to_rdf", "save_rdf", "load_rdf", "rdf_quality",
+    "reduce_intensity", "reduce_profiles", "pattern_to_rdf", "save_rdf",
+    "load_rdf", "rdf_quality",
 ]

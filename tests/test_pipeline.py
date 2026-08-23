@@ -599,3 +599,39 @@ def test_decompose_profiles_two_endmembers():
     # one component's fraction should trend monotonically with the true mix
     trend = res.fractions[:, 0]
     assert abs(np.corrcoef(fracs_true, trend)[0, 1]) > 0.95
+
+
+# -- NBED per-pattern helpers (median, reduce_profiles) --------------------
+def test_median_pattern_rejects_outliers():
+    from tests.synthetic import ring_pattern
+    base = ring_pattern((32, 32), rings=((10, 3, 1.0),), central_beam=2.0)
+    Ry, Rx = 5, 6
+    cube = np.stack([[base.copy() for _ in range(Rx)] for _ in range(Ry)])
+    # inject a few hot frames (huge values) — median must ignore them, mean would not
+    cube[0, 0] += 1e5
+    cube[1, 2] += 1e5
+    dc = fds.from_array(cube.astype(float), q_per_px=0.03)
+    med = fds.median_pattern(dc)
+    assert med.shape == (32, 32)
+    assert np.allclose(med, base, atol=1e-6)              # outliers rejected
+    assert fds.to_pattern(dc).max() > 100                 # mean is polluted
+
+
+def test_reduce_profiles_stack_matches_single():
+    q = np.linspace(0.05, 1.5, 300)
+    f_sq, f_avg_sq = fds.scattering_terms(q, {"Si": 1, "O": 2})
+    cfg = fds.RDFConfig(composition={"Si": 1, "O": 2}, q_int_min=0.15,
+                        q_int_max=1.4, r_min=1.1, r_max=8.0)
+    # two distinct structure signals -> a small stack
+    prof = []
+    for period in (0.24, 0.30):
+        s = 0.35 * np.sin(2 * np.pi * q / period) * np.exp(-0.8 * q)
+        prof.append(120.0 * (f_sq + f_avg_sq * s))
+    prof = np.array(prof)
+    out = fds.reduce_profiles(prof, q, cfg, n_jobs=1)
+    assert out["phi"].shape[0] == 2 and out["Gr"].shape[0] == 2
+    assert out["ok"].all()
+    # stack row matches an independent single reduction
+    qf, phi1, r, Gr1, diag = fds.reduce_intensity(q, prof[0], cfg)
+    assert np.allclose(out["phi"][0], phi1, atol=1e-6)
+    assert np.allclose(out["Gr"][0], Gr1, atol=1e-6)

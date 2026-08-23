@@ -217,6 +217,8 @@ def reduce_intensity(q, Iq, cfg: RDFConfig):
 
     tail = max(5, len(If) // 10)
     N0 = np.nanmedian(If[-tail:]) / max(np.nanmedian(f_sq[-tail:]), 1e-9)
+    if not np.isfinite(N0) or N0 <= 0:            # keep the log-bracket valid
+        N0 = 1.0
     sol = minimize_scalar(cost, bracket=(np.log(N0 * 0.3), np.log(max(N0, 1e-6))),
                           method="brent", options=dict(xtol=1e-4))
     N = float(np.exp(sol.x))
@@ -224,6 +226,66 @@ def reduce_intensity(q, Iq, cfg: RDFConfig):
     Gr = sine_ft(qf, phi, r, cfg)
     diag = {"N": N, "sub_rmin_rms": float(cost(np.log(N)))}
     return qf, phi, r, Gr, diag
+
+
+def _reduce_row(payload):
+    """Picklable worker: reduce one I(q) profile to (phi, Gr, N). None on failure."""
+    Iq, q, cfg = payload
+    try:
+        qf, phi, r, Gr, diag = reduce_intensity(q, Iq, cfg)
+        return phi, Gr, float(diag["N"])
+    except Exception:
+        return None
+
+
+def reduce_profiles(profiles, q, cfg: RDFConfig, n_jobs=1, progress=False):
+    """Reduce a *stack* of per-position I(q) profiles to φ(q) and G(r).
+
+    For a whole NBED scan you get one radial profile per probe position
+    (:func:`radial_profiles`); this reduces every one to a background-removed
+    structure factor φ(q) and its sine-FT G(r), so you can then decompose the
+    stack (NMF/PCA) into a few characteristic structure factors / RDFs.
+
+    Parameters
+    ----------
+    profiles : (n_pos, n_q) array
+        Per-position I(q) (finite; e.g. from ``radial_profiles``).
+    q : (n_q,) array
+        Common q axis (1/Å).
+    cfg : RDFConfig
+    n_jobs : int
+        Parallel workers (``-1`` = all cores). Each row runs an independent
+        scale-fit reduction, so this fans out cleanly.
+    progress : bool
+
+    Returns
+    -------
+    dict with ``q`` (windowed q), ``phi`` (n_pos, nq), ``r``, ``Gr`` (n_pos, nr),
+    ``N`` (n_pos,), ``ok`` (n_pos bool — False where the reduction failed).
+    """
+    from ..utils.parallel import parallel_map
+
+    profiles = np.asarray(profiles, float)
+    q = np.asarray(q, float)
+    n = profiles.shape[0]
+    m = np.isfinite(q) & (q >= cfg.q_int_min) & (q <= cfg.q_int_max)
+    qf = q[m]
+    r = np.arange(0.0, cfg.r_max, cfg.dr)
+
+    out = parallel_map(_reduce_row, [(profiles[i], q, cfg) for i in range(n)],
+                       n_jobs=n_jobs, progress=progress, desc="reduce")
+
+    phi = np.full((n, qf.size), np.nan)
+    Gr = np.full((n, r.size), np.nan)
+    N = np.full(n, np.nan)
+    ok = np.zeros(n, bool)
+    for i, res in enumerate(out):
+        if res is None:
+            continue
+        p, g, nn = res
+        if p.shape[0] == qf.size and g.shape[0] == r.size:
+            phi[i], Gr[i], N[i], ok[i] = p, g, nn, True
+    return dict(q=qf, phi=phi, r=r, Gr=Gr, N=N, ok=ok)
 
 
 # ---------------------------------------------------------------------------
