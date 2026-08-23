@@ -635,3 +635,34 @@ def test_reduce_profiles_stack_matches_single():
     qf, phi1, r, Gr1, diag = fds.reduce_intensity(q, prof[0], cfg)
     assert np.allclose(out["phi"][0], phi1, atol=1e-6)
     assert np.allclose(out["Gr"][0], Gr1, atol=1e-6)
+
+
+# -- dm4 reader: pick the real cube, not a 2D thumbnail (STEM SI files) -----
+def test_read_ncempy_prefers_highest_dim_dataset(monkeypatch):
+    # a STEM SI .dm4 holds survey (2D) + scan (2D) + CBED (4D); dmReader may
+    # return the 2D survey. _read_ncempy must search datasets and pick the 4D.
+    import sys, types
+    thumb = {"data": np.zeros((8, 8)), "pixelSize": [1.0, 1.0],
+             "pixelUnit": ["nm", "nm"]}
+    cube4d = {"data": np.zeros((3, 4, 8, 8)), "pixelSize": [1, 1, 0.1, 0.1],
+              "pixelUnit": ["nm", "nm", "1/nm", "1/nm"]}
+    fake_dm = types.ModuleType("ncempy.io.dm")
+    fake_dm.dmReader = lambda path: thumb
+
+    class _FakeFileDM:
+        def __init__(self, p): self.numObjects = 2
+        def parseHeader(self): pass
+        def getDataset(self, i):
+            if i == 0: return thumb
+            if i == 1: return cube4d
+            raise IndexError(i)
+    fake_dm.fileDM = _FakeFileDM
+    fake_io = types.ModuleType("ncempy.io"); fake_io.dm = fake_dm
+    fake = types.ModuleType("ncempy"); fake.io = fake_io
+    monkeypatch.setitem(sys.modules, "ncempy", fake)
+    monkeypatch.setitem(sys.modules, "ncempy.io", fake_io)
+    monkeypatch.setitem(sys.modules, "ncempy.io.dm", fake_dm)
+
+    from fourdstem.io.readers import _read_ncempy
+    data, scale, unit, meta = _read_ncempy("fake.dm4")
+    assert data.ndim == 4 and data.shape == (3, 4, 8, 8)   # got the CBED cube

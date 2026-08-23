@@ -49,15 +49,57 @@ def unit_to_inv_angstrom(value, unit, hint=None):
 # ---------------------------------------------------------------------------
 # individual readers
 # ---------------------------------------------------------------------------
+def _ncempy_best_dataset(path):
+    """Highest-dimensional dataset dict in a dm file, or None.
+
+    A .dm4 can hold several datasets — commonly a small 2D thumbnail/survey image
+    alongside the real 3D stack / 4D-STEM cube. ``dmReader`` sometimes returns the
+    2D one, which then can't be treated as a scan. Scan every dataset and keep the
+    one with the most dimensions (ties broken by size). Fully defensive: returns
+    None if anything about the ncempy API differs.
+    """
+    try:
+        from ncempy.io import dm
+        f = dm.fileDM(path)
+        try:
+            f.parseHeader()
+        except Exception:
+            pass
+        n = int(getattr(f, "numObjects", 0) or 0)
+    except Exception:
+        return None
+    best, best_key = None, (-1, -1)
+    for i in range(0, n + 2):                       # indexing varies by version
+        try:
+            ds = f.getDataset(i)
+        except Exception:
+            continue
+        if not isinstance(ds, dict):
+            continue
+        arr = ds.get("data")
+        if arr is None:
+            continue
+        key = (np.ndim(arr), int(np.size(arr)))
+        if key > best_key:
+            best, best_key = ds, key
+    return best
+
+
 def _read_ncempy(path):
     from ncempy.io import dm
     d = dm.dmReader(path)
     data = np.asarray(d["data"])
+    if data.ndim < 3:                              # got a 2D thumbnail? find the cube
+        alt = _ncempy_best_dataset(path)
+        if alt is not None and np.ndim(alt.get("data")) > data.ndim:
+            d = alt
+            data = np.asarray(d["data"])
     px = np.atleast_1d(d.get("pixelSize", [1.0]))
     un = d.get("pixelUnit", [""])
     un = un[-1] if isinstance(un, (list, tuple, np.ndarray)) else un
     return data, float(px[-1]), str(un), {"reader": "ncempy",
-                                          "pixelSize": px.tolist()}
+                                          "pixelSize": px.tolist(),
+                                          "raw_ndim": int(data.ndim)}
 
 
 def _read_hyperspy(path):
