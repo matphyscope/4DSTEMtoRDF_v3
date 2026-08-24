@@ -757,3 +757,24 @@ def test_material_mask_excludes_vacuum():
     empty = np.zeros((Ry, Rx), bool); empty[-3:, :] = True
     m2 = fds.material_mask(dc, empty_mask=empty)
     assert (~m2[-3:]).mean() > 0.8 and m2[:Ry - 3].all()
+
+
+# -- aligned averaging (beam-wander correction) ----------------------------
+def test_average_pattern_aligned_sharpens_wander():
+    from tests.synthetic import ring_pattern
+    from scipy.ndimage import shift as ndshift
+    base = ring_pattern((64, 64), rings=((16, 2, 1.0),), central_beam=8.0)
+    Ry, Rx = 6, 6
+    cube = np.empty((Ry, Rx, 64, 64))
+    rng = np.random.default_rng(0)
+    for iy in range(Ry):
+        for ix in range(Rx):
+            dx, dy = rng.integers(-6, 7), rng.integers(-6, 7)   # random beam wander
+            cube[iy, ix] = ndshift(base, (dy, dx), order=1, mode="nearest")
+    dc = fds.from_array(cube, q_per_px=0.05)
+    mask = np.ones((Ry, Rx), bool)
+    plain = fds.average_pattern(dc, mask)
+    aligned = fds.average_pattern_aligned(dc, mask, threshold=0.3)
+    # aligned average has a sharper (higher-contrast) central beam than the smeared plain one
+    assert aligned.max() > plain.max() * 1.2
+    assert aligned.shape == (64, 64)

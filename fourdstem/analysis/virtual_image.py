@@ -124,6 +124,40 @@ def average_pattern(cube, scan_mask):
     return flat[m].mean(0, dtype=np.float64)
 
 
+def average_pattern_aligned(cube, scan_mask, target=None, threshold=0.3):
+    """Mean pattern over masked positions, each SHIFTED to a common beam center.
+
+    When the direct beam wanders across the scan (imperfect descan / a tilted
+    beam over a wide area), a plain :func:`average_pattern` smears the rings
+    because it stacks patterns whose centers differ. Here each pattern is first
+    integer-shifted so its beam center (center of mass of the bright core above
+    ``threshold``) lands on ``target`` (default the detector center), then
+    averaged — giving a sharp mean pattern suitable for a fixed-center RDF.
+    Loops over the masked positions only, so it stays light for a phase region.
+    """
+    flat = cube._flat_patterns()
+    dp = cube.dp_shape
+    H, W = dp
+    tx, ty = target if target is not None else (W / 2.0, H / 2.0)
+    yy, xx = np.mgrid[0:H, 0:W]
+    idx = np.where(np.asarray(scan_mask, bool).ravel())[0]
+    if idx.size == 0:
+        return np.full(dp, np.nan)
+    acc = np.zeros(dp, np.float64)
+    for i in idx:
+        p = np.asarray(flat[i], np.float64)
+        pk = p.max()
+        w = np.where(p >= threshold * pk, p, 0.0) if pk > 0 else p
+        tot = w.sum()
+        if tot > 0:
+            cx = (w * xx).sum() / tot
+            cy = (w * yy).sum() / tot
+        else:
+            cx, cy = tx, ty
+        acc += np.roll(np.roll(p, int(round(ty - cy)), 0), int(round(tx - cx)), 1)
+    return acc / idx.size
+
+
 def structural_map(cube, center=None, r_inner=None, r_outer=None,
                    norm_inner=None, norm_outer=None):
     """Brightness-normalized structural virtual image: ring-DF / total.
