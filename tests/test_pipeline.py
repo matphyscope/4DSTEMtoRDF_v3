@@ -666,3 +666,27 @@ def test_read_ncempy_prefers_highest_dim_dataset(monkeypatch):
     from fourdstem.io.readers import _read_ncempy
     data, scale, unit, meta = _read_ncempy("fake.dm4")
     assert data.ndim == 4 and data.shape == (3, 4, 8, 8)   # got the CBED cube
+
+
+# -- vacuum / reference subtraction ----------------------------------------
+def test_subtract_reference_zeros_empty_region():
+    from tests.synthetic import ring_pattern
+    mat = ring_pattern((32, 32), rings=((10, 3, 1.0),), central_beam=3.0)
+    vac = ring_pattern((32, 32), rings=(), central_beam=3.0)   # beam only, no ring
+    Ry, Rx = 6, 5
+    cube = np.empty((Ry, Rx, 32, 32))
+    cube[:] = mat
+    cube[-2:, :] = vac                                          # bottom 2 rows = empty
+    dc = fds.from_array(cube, q_per_px=0.03)
+    empty = np.zeros((Ry, Rx), bool); empty[-2:, :] = True
+    ref = fds.average_pattern(dc, empty)
+    sub = fds.subtract_reference(dc, ref)
+    assert sub.calibration.q_per_px == pytest.approx(0.03)
+    assert sub.metadata.get("reference_subtracted") is True
+    # empty rows collapse to ~0; material rows keep the ring (nonzero)
+    flat = sub._flat_patterns().reshape(Ry, Rx, 32, 32)
+    assert np.abs(flat[-2:]).mean() < 1e-4
+    assert np.abs(flat[:-2]).mean() > 0.05
+    # ndarray input path + clip
+    arr_sub = fds.subtract_reference(cube, ref, clip_negative=True)
+    assert arr_sub.min() >= 0.0 and arr_sub.shape == cube.shape

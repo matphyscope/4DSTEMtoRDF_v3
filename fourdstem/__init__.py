@@ -49,7 +49,7 @@ from .preprocess import (
     center_of_mass, friedel_correlation, find_center_friedel, find_center,
     beam_stopper_mask, bragg_peak_mask, detect_bragg_peaks, combine_masks,
     disk_mask, annular_mask, wedge_mask,
-    to_pattern, median_pattern, crop_detector, bin_detector, bin_cube_detector,
+    to_pattern, median_pattern, subtract_reference, crop_detector, bin_detector, bin_cube_detector,
     polar_transform,
 )
 
@@ -95,7 +95,7 @@ __all__ = [
     "median_denoise", "clean_pattern", "center_of_mass", "friedel_correlation",
     "find_center_friedel", "find_center", "beam_stopper_mask", "bragg_peak_mask",
     "detect_bragg_peaks", "combine_masks", "disk_mask", "annular_mask",
-    "wedge_mask", "to_pattern", "median_pattern", "crop_detector",
+    "wedge_mask", "to_pattern", "median_pattern", "subtract_reference", "crop_detector",
     "bin_detector", "bin_cube_detector", "polar_transform",
     # analysis
     "azimuthal_integrate", "azimuthal_variance", "radial_profiles", "virtual_image", "bright_field",

@@ -65,8 +65,11 @@ class RDFResult:
 # ---------------------------------------------------------------------------
 # scattering factors (Kirkland via abTEM; analytic fallback)
 # ---------------------------------------------------------------------------
-_Z = {"H": 1, "C": 6, "N": 7, "O": 8, "Si": 14, "Al": 13, "Au": 79,
-      "Ti": 22, "Fe": 26, "Cu": 29, "Ge": 32}
+_Z = {"H": 1, "Li": 3, "Be": 4, "B": 5, "C": 6, "N": 7, "O": 8, "F": 9,
+      "Na": 11, "Mg": 12, "Al": 13, "Si": 14, "P": 15, "S": 16, "Cl": 17,
+      "K": 19, "Ca": 20, "Ti": 22, "V": 23, "Cr": 24, "Mn": 25, "Fe": 26,
+      "Co": 27, "Ni": 28, "Cu": 29, "Zn": 30, "Ge": 32, "Zr": 40, "Ag": 47,
+      "Au": 79}
 _warned_sf = [False]
 _SF_CACHE = [None]
 _BUNDLED_KIRKLAND = os.path.join(os.path.dirname(__file__), "data", "kirkland.json")

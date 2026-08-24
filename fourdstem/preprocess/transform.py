@@ -70,6 +70,36 @@ def median_pattern(data, roi=None):
     return out
 
 
+def subtract_reference(data, ref, clip_negative=False):
+    """Subtract a common 2D reference pattern from every diffraction pattern.
+
+    The classic use is **vacuum / empty-region subtraction**: average the patterns
+    over a part of the scan with no sample (e.g. the bottom rows) and subtract that
+    from the whole cube. The empty region then goes to ~0, so an unsupervised
+    decomposition (PCA/NMF) no longer spends its leading component on the trivial
+    sample-vs-vacuum contrast and instead separates *structural* differences within
+    the material. Also removes detector background and the common direct-beam tail.
+
+    Returns a new DataCube (float32) — the reference broadcasts over the scan axes,
+    so peak memory is one float32 copy. ``clip_negative`` floors the result at 0
+    (useful before an NMF that needs non-negative patterns).
+    """
+    ref = np.asarray(ref, np.float32)
+    is_cube = isinstance(data, DataCube)
+    arr = data.data if is_cube else np.asarray(data)
+    if arr.shape[-2:] != ref.shape:
+        raise ValueError(f"reference {ref.shape} != detector {arr.shape[-2:]}")
+    out = arr.astype(np.float32) - ref                 # broadcasts (...,Qy,Qx)-(Qy,Qx)
+    if clip_negative:
+        np.clip(out, 0, None, out=out)
+    if is_cube:
+        from ..io.datacube import Calibration
+        return DataCube(out, calibration=data.calibration,
+                        metadata={**data.metadata, "reference_subtracted": True},
+                        name=data.name + "-refsub")
+    return out
+
+
 def crop_detector(img, center, half_size):
     """Crop a square window of half-width ``half_size`` around ``center``.
 
