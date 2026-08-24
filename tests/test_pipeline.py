@@ -690,3 +690,48 @@ def test_subtract_reference_zeros_empty_region():
     # ndarray input path + clip
     arr_sub = fds.subtract_reference(cube, ref, clip_negative=True)
     assert arr_sub.min() >= 0.0 and arr_sub.shape == cube.shape
+
+
+# -- cepstral / FC-STEM (EWPC) ---------------------------------------------
+def test_ewpc_calibration_cosine():
+    # a cosine of m cycles across the pattern has a cepstral peak at r = m*dr,
+    # dr = 1/(N*q_per_px). Verifies the quefrency (A) calibration.
+    N, qpp = 128, 0.05
+    dr = 1.0 / (N * qpp)
+    yy, xx = np.mgrid[0:N, 0:N]
+    for m in (8, 16, 24):
+        I = 1.0 + 0.5 * np.cos(2 * np.pi * m * xx / N)
+        cep = fds.ewpc_pattern(I, window=False)
+        r, prof = fds.cepstral_radial_profile(cep, qpp, r_min=0.2)
+        pk = r[np.argmax(prof)]
+        assert abs(pk - m * dr) < 1.5 * (r[1] - r[0])       # within a bin
+    assert fds.quefrency_per_px(N, qpp) == pytest.approx(dr)
+
+
+def test_fluctuation_image_discriminates_order():
+    from tests.synthetic import ring_pattern, bragg_pattern
+    N, qpp = 96, 0.05
+    Ry, Rx = 4, 6
+    cube = np.empty((Ry, Rx, N, N))
+    for iy in range(Ry):
+        for ix in range(Rx):
+            if ix < Rx // 2:                                # ordered: sharp spots
+                cube[iy, ix] = bragg_pattern((N, N), spots=6, radius=22, amp=6) + 2
+            else:                                            # disordered: halo
+                cube[iy, ix] = ring_pattern((N, N), rings=((22, 4, 1.0),),
+                                            central_beam=8.0) + 2
+    dc = fds.from_array(cube, q_per_px=qpp)
+    F = fds.fluctuation_image(dc, r_in=0.6, r_out=1.6, q_per_px=qpp, n_jobs=1)
+    assert F.shape == (Ry, Rx)
+    assert F[:, :Rx // 2].mean() > F[:, Rx // 2:].mean()     # ordered brighter
+
+
+def test_ewpc_profiles_shape():
+    from tests.synthetic import ring_pattern
+    N = 64
+    cube = np.stack([[ring_pattern((N, N), rings=((16, 3, 1.0),), central_beam=5.0)
+                      for _ in range(3)] for _ in range(2)])
+    dc = fds.from_array(cube, q_per_px=0.05)
+    profs, r = fds.ewpc_profiles(dc, q_per_px=0.05, n_bins=24, n_jobs=1)
+    assert profs.shape[0] == 6 and profs.shape[1] == r.size
+    assert np.all(np.diff(r) > 0)
