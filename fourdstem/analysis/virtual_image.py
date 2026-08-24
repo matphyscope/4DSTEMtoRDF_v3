@@ -43,6 +43,68 @@ def annular_dark_field(cube, center=None, r_inner=None, r_outer=None):
     return cube.get_virtual_image(annular_mask(dp, center, r_inner, r_outer))
 
 
+def _otsu_threshold(x, nbins=256):
+    """Otsu's threshold (numpy only) — the valley between two intensity modes."""
+    x = np.asarray(x, float).ravel()
+    x = x[np.isfinite(x)]
+    lo, hi = float(x.min()), float(x.max())
+    if hi <= lo:
+        return lo
+    hist, edges = np.histogram(x, bins=nbins, range=(lo, hi))
+    p = hist.astype(float) / max(hist.sum(), 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    w = np.cumsum(p)
+    mu = np.cumsum(p * centers)
+    muT = mu[-1]
+    denom = w * (1.0 - w)
+    safe = denom > 1e-12
+    sb = np.zeros_like(denom)
+    sb[safe] = (muT * w[safe] - mu[safe]) ** 2 / denom[safe]
+    return float(centers[int(np.argmax(sb))])
+
+
+def material_mask(cube, center=None, r_inner=None, r_outer=None, empty_mask=None,
+                  thresh_k=3.0, percentile=None, min_frac=0.02):
+    """Boolean scan map of positions that contain material (vs vacuum/empty).
+
+    Empty (no-sample) probe positions scatter almost nothing into the structural
+    ring, so an annular scattering image is dark there. This thresholds that image
+    to keep only material positions, so they can be *excluded* from the analysis
+    (radial profiles, reduction, decomposition, fluctuation) instead of diluting
+    it with vacuum.
+
+    Threshold, in priority order:
+      * ``empty_mask`` given — a scan-shaped bool marking a known empty region:
+        threshold = ``mean + thresh_k*std`` of the empty positions' scattering
+        (robust, tied to the real vacuum level).
+      * ``percentile`` given — that percentile of the scattering image.
+      * otherwise — Otsu's threshold (automatic two-mode valley).
+
+    Returns a scan-shaped bool (True = material). ``min_frac`` guards against a
+    degenerate mask (if fewer than this fraction survive, keep the top ``min_frac``).
+    """
+    center = _resolve_center(cube, center)
+    dp = cube.dp_shape
+    if r_inner is None:
+        r_inner = min(dp) / 8.0
+    if r_outer is None:
+        r_outer = min(dp) / 2.5
+    scat = np.asarray(annular_dark_field(cube, center=center,
+                                         r_inner=r_inner, r_outer=r_outer), float)
+    if empty_mask is not None:
+        e = scat[np.asarray(empty_mask, bool)]
+        thr = float(e.mean() + thresh_k * e.std())
+    elif percentile is not None:
+        thr = float(np.percentile(scat, percentile))
+    else:
+        thr = _otsu_threshold(scat)
+    mask = scat > thr
+    if mask.mean() < min_frac:                       # degenerate -> keep the brightest
+        thr = float(np.percentile(scat, 100 * (1 - min_frac)))
+        mask = scat > thr
+    return mask
+
+
 def average_pattern(cube, scan_mask):
     """Mean diffraction pattern over the scan positions where ``scan_mask`` is True.
 

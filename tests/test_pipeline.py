@@ -735,3 +735,25 @@ def test_ewpc_profiles_shape():
     profs, r = fds.ewpc_profiles(dc, q_per_px=0.05, n_bins=24, n_jobs=1)
     assert profs.shape[0] == 6 and profs.shape[1] == r.size
     assert np.all(np.diff(r) > 0)
+
+
+# -- material mask (exclude vacuum/empty positions) ------------------------
+def test_material_mask_excludes_vacuum():
+    from tests.synthetic import ring_pattern
+    mat = ring_pattern((40, 40), rings=((12, 3, 1.0),), central_beam=4.0)
+    vac = ring_pattern((40, 40), rings=(), central_beam=4.0)        # beam only, no ring
+    Ry, Rx = 10, 8
+    cube = np.empty((Ry, Rx, 40, 40))
+    for iy in range(Ry):
+        cube[iy, :] = vac if iy >= Ry - 3 else mat                  # bottom 3 rows empty
+    cube += 0.02 * np.random.default_rng(0).standard_normal(cube.shape)
+    dc = fds.from_array(cube, q_per_px=0.05)
+    # automatic (Otsu)
+    m = fds.material_mask(dc)
+    assert m.shape == (Ry, Rx)
+    assert m[:Ry - 3].mean() > 0.9         # material rows kept
+    assert m[Ry - 3:].mean() < 0.1         # empty rows excluded
+    # empty-region-anchored threshold
+    empty = np.zeros((Ry, Rx), bool); empty[-3:, :] = True
+    m2 = fds.material_mask(dc, empty_mask=empty)
+    assert (~m2[-3:]).mean() > 0.8 and m2[:Ry - 3].all()

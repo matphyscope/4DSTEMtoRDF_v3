@@ -6,6 +6,7 @@ from .virtual_image import (
     annular_dark_field,
     center_of_mass_map,
     structural_map,
+    material_mask,
     average_pattern,
 )
 from .peaks import (
@@ -45,7 +46,7 @@ from .rdf import (
 
 __all__ = [
     "azimuthal_integrate", "azimuthal_variance", "radial_profiles",
-    "virtual_image", "bright_field", "annular_dark_field", "center_of_mass_map", "structural_map", "average_pattern",
+    "virtual_image", "bright_field", "annular_dark_field", "center_of_mass_map", "structural_map", "material_mask", "average_pattern",
     "find_peaks_1d", "refine_peak_parabolic", "first_peak_position", "peak_centroid",
     "fit_gaussian_peak",
     "DecompositionResult", "ProfileDecomposition", "nmf_decompose", "pca_decompose",
