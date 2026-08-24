@@ -82,3 +82,60 @@ def clean_pattern(img, hot_threshold=8.0, size=3, do_dead=True):
         out = remove_dead_pixels(out, size=size)
     out = remove_hot_pixels(out, threshold=hot_threshold, size=size)
     return out
+
+
+def bad_pixel_map(reference, hot_threshold=8.0, max_frac=0.01):
+    """Fixed hot/dead pixel mask from a reference pattern (mean or max over scan).
+
+    Hot = isolated single-pixel spikes far above the 3x3 local median (X-ray-
+    damaged / stuck-bright detector pixels), NOT extended structure like the beam
+    or rings. Dead = zero. Detector defects sit at the SAME location every frame,
+    so a scan-average does not remove them — detect once here, repair everywhere
+    with :func:`repair_bad_pixels`. ``max_frac`` caps the flagged fraction (keeps
+    only the most extreme) so real structure is never mass-flagged.
+    """
+    from scipy.ndimage import median_filter
+    ref = np.asarray(reference, float)
+    med = median_filter(ref, size=3)           # small kernel -> isolates spikes
+    resid = ref - med
+    s = np.median(np.abs(resid)) * 1.4826 + 1e-9
+    score = resid / s
+    hot = score > hot_threshold
+    if hot.mean() > max_frac:                  # too many -> keep only the extremes
+        cut = np.quantile(score, 1.0 - max_frac)
+        hot = score > max(cut, hot_threshold)
+    dead = (ref <= 0) & (med > hot_threshold * s)   # zero only WHERE neighbours are bright
+    return hot | dead
+
+
+def repair_bad_pixels(cube, bad_mask):
+    """Replace fixed bad pixels in every pattern with their good-neighbour mean.
+
+    Fast and memory-light: loops only over the (few) bad-pixel locations and
+    averages each one's in-bounds, non-bad 8-neighbours across the whole scan at
+    once. Returns a new DataCube (or ndarray) with the defects repaired.
+    """
+    from ..io.datacube import DataCube
+    is_cube = isinstance(cube, DataCube)
+    data = np.array(cube.data if is_cube else cube, dtype=np.float32)  # writable copy
+    dy, dx = data.shape[-2:]
+    flat = data.reshape(-1, dy, dx)
+    bad = np.asarray(bad_mask, bool)
+    ys, xs = np.where(bad)
+    offs = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
+    for y, x in zip(ys, xs):
+        acc = None; cnt = 0
+        for oy, ox in offs:
+            ny, nx = y + oy, x + ox
+            if 0 <= ny < dy and 0 <= nx < dx and not bad[ny, nx]:
+                v = flat[:, ny, nx]
+                acc = v.astype(np.float64) if acc is None else acc + v
+                cnt += 1
+        if cnt:
+            flat[:, y, x] = (acc / cnt).astype(flat.dtype)
+    out = flat.reshape(data.shape)
+    if is_cube:
+        return DataCube(out, calibration=cube.calibration,
+                        metadata={**cube.metadata, "bad_pixels_repaired": int(bad.sum())},
+                        name=cube.name)
+    return out

@@ -778,3 +778,21 @@ def test_average_pattern_aligned_sharpens_wander():
     # aligned average has a sharper (higher-contrast) central beam than the smeared plain one
     assert aligned.max() > plain.max() * 1.2
     assert aligned.shape == (64, 64)
+
+
+# -- fixed bad-pixel detection + repair -------------------------------------
+def test_bad_pixel_map_and_repair():
+    from tests.synthetic import ring_pattern
+    base = ring_pattern((64, 64), rings=((18, 4, 1.0),), central_beam=6.0)
+    Ry, Rx = 4, 5
+    cube = np.tile(base, (Ry, Rx, 1, 1)).astype(float)
+    cube += 0.05 * np.random.default_rng(0).standard_normal(cube.shape)
+    cube[:, :, 10, 20] = 9999.0                     # fixed hot pixel every frame
+    cube[:, :, 40, 45] = 8000.0
+    dc = fds.from_array(cube, q_per_px=0.05)
+    bad = fds.bad_pixel_map(dc.mean_dp(), hot_threshold=8.0)
+    assert bad[10, 20] and bad[40, 45]              # hot pixels flagged
+    assert bad.mean() < 0.02                        # structure NOT mass-flagged
+    rep = fds.repair_bad_pixels(dc, bad)
+    assert rep.data[:, :, 10, 20].mean() < 10       # repaired to neighbour level
+    assert rep.metadata.get("bad_pixels_repaired") == int(bad.sum())

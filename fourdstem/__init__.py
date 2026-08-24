@@ -45,7 +45,7 @@ from .io import (
 # -- preprocess -------------------------------------------------------------
 from .preprocess import (
     q_per_px_from_ring, pixels_to_q, q_to_pixels, q_axis, max_q_for_center,
-    remove_hot_pixels, remove_dead_pixels, median_denoise, clean_pattern,
+    remove_hot_pixels, remove_dead_pixels, median_denoise, clean_pattern, bad_pixel_map, repair_bad_pixels,
     center_of_mass, friedel_correlation, find_center_friedel, find_center,
     beam_stopper_mask, bragg_peak_mask, detect_bragg_peaks, combine_masks,
     disk_mask, annular_mask, wedge_mask,
@@ -94,7 +94,7 @@ __all__ = [
     # preprocess
     "q_per_px_from_ring", "pixels_to_q", "q_to_pixels", "q_axis",
     "max_q_for_center", "remove_hot_pixels", "remove_dead_pixels",
-    "median_denoise", "clean_pattern", "center_of_mass", "friedel_correlation",
+    "median_denoise", "clean_pattern", "bad_pixel_map", "repair_bad_pixels", "center_of_mass", "friedel_correlation",
     "find_center_friedel", "find_center", "beam_stopper_mask", "bragg_peak_mask",
     "detect_bragg_peaks", "combine_masks", "disk_mask", "annular_mask",
     "wedge_mask", "to_pattern", "median_pattern", "subtract_reference", "crop_detector",
