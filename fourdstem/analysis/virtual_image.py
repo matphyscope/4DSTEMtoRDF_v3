@@ -93,7 +93,11 @@ def material_mask(cube, center=None, r_inner=None, r_outer=None, empty_mask=None
                                          r_inner=r_inner, r_outer=r_outer), float)
     if empty_mask is not None:
         e = scat[np.asarray(empty_mask, bool)]
-        thr = float(e.mean() + thresh_k * e.std())
+        # robust (median + k*MAD) so a few material pixels leaking into the empty
+        # region don't inflate the threshold and over-exclude the sample
+        med = float(np.median(e))
+        mad = 1.4826 * float(np.median(np.abs(e - med)))
+        thr = med + thresh_k * (mad if mad > 0 else float(e.std()))
     elif percentile is not None:
         thr = float(np.percentile(scat, percentile))
     else:
