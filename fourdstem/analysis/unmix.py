@@ -142,3 +142,50 @@ def reference_degeneracy(refs):
     R = np.vstack([np.asarray(refs[c], float) for c in names])
     Rn = R / (np.linalg.norm(R, axis=1, keepdims=True) + 1e-12)
     return names, Rn @ Rn.T
+
+
+# Main diffraction-ring d-spacings (Å) with rough relative intensities, for
+# RING-POSITION matching of weak/broad amorphous patterns (complementary to the
+# real-space shell model above). Cubic values are a/sqrt(h^2+k^2+l^2); Li3N
+# (hex) and Li2CO3 (monoclinic) use tabulated powder lines.
+COMPOUND_RINGS = {
+    "LiF":    [(2.324, 1.0), (2.013, 0.6), (1.423, 0.5), (1.214, 0.3)],
+    "Li2O":   [(2.667, 1.0), (2.310, 0.4), (1.633, 0.6), (1.393, 0.3)],
+    "Li3N":   [(3.872, 0.5), (3.153, 0.7), (2.451, 1.0), (1.936, 0.4), (1.821, 0.5)],
+    "Li2CO3": [(4.157, 0.4), (3.033, 0.5), (2.813, 1.0), (2.492, 0.5), (2.145, 0.3), (1.873, 0.3)],
+    "Li2S":   [(3.300, 1.0), (2.858, 0.6), (2.021, 0.5), (1.724, 0.3)],
+}
+
+
+def compound_ring_q(compound):
+    """Main-ring positions of a compound as ``[(q=1/d, intensity), ...]`` (1/Å)."""
+    return [(1.0 / d, w) for d, w in COMPOUND_RINGS[compound]]
+
+
+def match_rings(meas_q, compounds=None, tol=0.03):
+    """Rank candidate compounds by how well their rings match measured ring q's.
+
+    ``meas_q`` : measured ring positions (1/Å, e.g. from :func:`find_fsdp`).
+    For each compound, sum the intensities of its rings that fall within ``tol``
+    of any measured ring (coverage), and note unmatched STRONG compound rings
+    that *should* have appeared. Returns a list sorted by score, each entry
+    ``(compound, score, matched_q, missing_strong_q)``.
+    """
+    meas = np.atleast_1d(np.asarray(meas_q, float))
+    meas = meas[np.isfinite(meas)]
+    names = list(compounds) if compounds is not None else list(COMPOUND_RINGS)
+    out = []
+    for c in names:
+        rings = COMPOUND_RINGS[c]
+        wsum = sum(w for _, w in rings) + 1e-12
+        score = 0.0
+        matched, missing = [], []
+        for d, w in rings:
+            qc = 1.0 / d
+            if meas.size and np.min(np.abs(meas - qc)) <= tol:
+                score += w
+                matched.append(round(qc, 3))
+            elif w >= 0.6:                       # a strong ring that is absent
+                missing.append(round(qc, 3))
+        out.append((c, score / wsum, matched, missing))
+    return sorted(out, key=lambda x: -x[1])

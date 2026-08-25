@@ -843,3 +843,14 @@ def test_find_fsdp_finds_ring_over_beam_decay():
     # pure monotonic decay -> low confidence (no real ring)
     qp2, conf2 = fds.find_fsdp(q, 200 * np.exp(-q / 0.08) + 0.5)
     assert conf2 < conf                                # weaker than a real bump
+
+
+def test_match_rings_identifies_large_d_ring():
+    """A ring at d~4.1 A (q~0.244) matches Li2CO3, not the rocksalt/antifluorite set."""
+    ranked = fds.match_rings([0.244], tol=0.03)
+    top = ranked[0][0]
+    assert top in ("Li2CO3", "Li3N")                 # only large-cell phases have a ring here
+    scores = {c: s for c, s, *_ in ranked}
+    assert scores["LiF"] == 0 and scores["Li2O"] == 0 and scores["Li2S"] == 0
+    # exact-position winner is Li2CO3 (4.157 A -> q 0.2406)
+    assert abs(1 / 4.157 - 0.244) < abs(1 / 3.872 - 0.244)
