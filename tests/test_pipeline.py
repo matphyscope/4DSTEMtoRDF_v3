@@ -796,3 +796,39 @@ def test_bad_pixel_map_and_repair():
     rep = fds.repair_bad_pixels(dc, bad)
     assert rep.data[:, :, 10, 20].mean() < 10       # repaired to neighbour level
     assert rep.metadata.get("bad_pixels_repaired") == int(bad.sum())
+
+
+def test_unmix_nnls_recovers_pure_and_mixture():
+    """NNLS unmixing IDs a pure compound and recovers a known mixing ratio."""
+    r = np.arange(0.5, 8.0, 0.02)
+    refs = fds.build_references(r, sigma=0.5)
+    # pure Li2S -> almost all Li2S
+    names, ab, res = fds.unmix_nnls(refs["Li2S"] * 3.0, refs, r=r, r_range=(1.2, 6.0))
+    d = dict(zip(names, ab))
+    assert d["Li2S"] > 0.9 and d["LiF"] < 0.1
+    # 2:1 LiF:Li2CO3 (both separable) -> ratio recovered within tolerance
+    mix = refs["LiF"] * 2.0 + refs["Li2CO3"] * 1.0
+    names, ab, res = fds.unmix_nnls(mix, refs, r=r, r_range=(1.2, 6.0))
+    d = dict(zip(names, ab))
+    assert d["LiF"] > d["Li2CO3"] > 0.1
+    assert abs(d["LiF"] / (d["Li2CO3"] + 1e-9) - 2.0) < 0.6
+    assert res < 0.2                                  # good fit
+
+
+def test_unmix_absent_compound_gets_zero():
+    """A candidate that is not present receives ~zero abundance."""
+    r = np.arange(0.5, 8.0, 0.02)
+    refs = fds.build_references(r, sigma=0.5)
+    names, ab, res = fds.unmix_nnls(refs["Li2CO3"] * 2.0, refs, r=r, r_range=(1.2, 6.0))
+    d = dict(zip(names, ab))
+    assert d["Li2S"] < 0.05                           # Li2S truly absent
+
+
+def test_reference_degeneracy_flags_collinear_pairs():
+    """~2.0 A compounds are collinear at low resolution; Li2S/Li2CO3 are not."""
+    r = np.arange(0.5, 8.0, 0.02)
+    refs = fds.build_references(r, sigma=0.5)
+    names, C = fds.reference_degeneracy(refs)
+    idx = {n: i for i, n in enumerate(names)}
+    assert C[idx["LiF"], idx["Li2O"]] > 0.85          # hard to separate
+    assert C[idx["Li2S"], idx["Li2CO3"]] < 0.3        # easily separated

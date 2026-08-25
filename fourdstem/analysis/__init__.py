@@ -44,6 +44,13 @@ from .rdf import (
     load_rdf,
     rdf_quality,
 )
+from .unmix import (
+    COMPOUND_SHELLS,
+    synth_compound_rdf,
+    build_references,
+    unmix_nnls,
+    reference_degeneracy,
+)
 
 __all__ = [
     "azimuthal_integrate", "azimuthal_variance", "radial_profiles",
@@ -57,4 +64,6 @@ __all__ = [
     "RDFConfig", "RDFResult", "scattering_terms", "damping_window", "sine_ft",
     "reduce_intensity", "reduce_profiles", "pattern_to_rdf", "save_rdf",
     "load_rdf", "rdf_quality",
+    "COMPOUND_SHELLS", "synth_compound_rdf", "build_references", "unmix_nnls",
+    "reference_degeneracy",
 ]
