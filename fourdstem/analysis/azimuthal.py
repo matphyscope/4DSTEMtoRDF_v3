@@ -68,7 +68,8 @@ def azimuthal_integrate(img, center, q_per_px, mask=None, q_grid=None,
     return qc, Iq[1:len(q_grid)]
 
 
-def radial_profiles(cube, center, n_bins=None, mask=None, normalize=False):
+def radial_profiles(cube, center, n_bins=None, mask=None, normalize=False,
+                    chunk=2048):
     """Per-scan-position radial intensity I(q) — one profile per position.
 
     Returns ``(profiles, r_centers)`` where ``profiles`` has shape
@@ -76,7 +77,14 @@ def radial_profiles(cube, center, n_bins=None, mask=None, normalize=False):
     compact structural feature vector — ideal input for clustering (phase
     mapping) or per-position structural metrics, far more robust than raw pixels.
     ``normalize=True`` scales each profile to unit sum (compare shape, not dose).
+
+    Memory: positions are processed in blocks of ``chunk`` and kept in float32,
+    and the per-bin averaging is a single sparse matrix product, so peak memory
+    is ``chunk × n_kept_pixels`` rather than a float64 copy of the whole cube
+    (which used to crash the kernel on large scans).
     """
+    from scipy import sparse
+
     dp = cube.dp_shape
     flat = cube._flat_patterns()
     n_pos = flat.shape[0]
@@ -90,16 +98,23 @@ def radial_profiles(cube, center, n_bins=None, mask=None, normalize=False):
     keep = (idx >= 0) & (idx < n_bins)
     if mask is not None:
         keep &= ~np.asarray(mask, bool).ravel()
-    idx_k = idx[keep]
-    F = flat.reshape(n_pos, -1)[:, keep].astype(np.float64)
-    prof = np.zeros((n_pos, n_bins))
-    for b in range(n_bins):
-        sel = idx_k == b
-        if sel.any():
-            prof[:, b] = F[:, sel].mean(1)
+    idx_k = idx[keep].astype(np.intp)
+    counts = np.bincount(idx_k, minlength=n_bins).astype(np.float32)
+    counts[counts == 0] = 1.0
+    # sparse (n_kept x n_bins) averaging operator:  profiles = F_kept @ M
+    M = sparse.csr_matrix(
+        (1.0 / counts[idx_k], (np.arange(idx_k.size), idx_k)),
+        shape=(idx_k.size, n_bins), dtype=np.float32)
+
+    flat2 = flat.reshape(n_pos, -1)
+    prof = np.zeros((n_pos, n_bins), np.float32)
+    for s in range(0, n_pos, chunk):
+        e = min(s + chunk, n_pos)
+        Fk = np.asarray(flat2[s:e][:, keep], dtype=np.float32)   # one block only
+        prof[s:e] = Fk @ M
     if normalize:
-        s = prof.sum(1, keepdims=True)
-        prof = prof / np.where(s > 0, s, 1.0)
+        ssum = prof.sum(1, keepdims=True)
+        prof = prof / np.where(ssum > 0, ssum, 1.0)
     return prof, 0.5 * (edges[:-1] + edges[1:])
 
 
