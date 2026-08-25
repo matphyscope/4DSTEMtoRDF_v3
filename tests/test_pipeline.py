@@ -854,3 +854,11 @@ def test_match_rings_identifies_large_d_ring():
     assert scores["LiF"] == 0 and scores["Li2O"] == 0 and scores["Li2S"] == 0
     # exact-position winner is Li2CO3 (4.157 A -> q 0.2406)
     assert abs(1 / 4.157 - 0.244) < abs(1 / 3.872 - 0.244)
+
+
+def test_synth_compound_iq_peaks_at_ring_positions():
+    """The synthetic ring profile peaks at a compound's ring q=1/d positions."""
+    q = np.linspace(0.1, 1.1, 400)
+    iq = fds.synth_compound_iq("LiF", q, sigma_q=0.02)
+    qpk = q[np.argmax(iq)]
+    assert abs(qpk - 1 / 2.324) < 0.02          # LiF strongest ring d=2.324 A

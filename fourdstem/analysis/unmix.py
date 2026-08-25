@@ -195,3 +195,22 @@ def match_rings(meas_q, compounds=None, tol=0.04, sigma=0.02):
                 missing.append(round(qc, 3))
         out.append((c, score / wsum, matched, missing, round(min_dq, 3)))
     return sorted(out, key=lambda x: -x[1])
+
+
+def synth_compound_iq(compound, q, sigma_q=0.04, normalize=True):
+    """Expected diffraction-ring profile I_ring(q) for a compound.
+
+    Gaussians at each ring position q=1/d weighted by intensity, broadened by
+    ``sigma_q`` (1/Å) to match the measured ring width. Use this to overlay/score
+    a candidate against a measured I(q) residual in reciprocal space (the domain
+    that works for weak, broad amorphous rings where the RDF fails).
+    """
+    q = np.asarray(q, float)
+    out = np.zeros_like(q)
+    for d, w in COMPOUND_RINGS[compound]:
+        out += w * np.exp(-0.5 * ((q - 1.0 / d) / sigma_q) ** 2)
+    if normalize:
+        n = np.linalg.norm(out)
+        if n > 0:
+            out = out / n
+    return out
