@@ -832,3 +832,14 @@ def test_reference_degeneracy_flags_collinear_pairs():
     idx = {n: i for i, n in enumerate(names)}
     assert C[idx["LiF"], idx["Li2O"]] > 0.85          # hard to separate
     assert C[idx["Li2S"], idx["Li2CO3"]] < 0.3        # easily separated
+
+
+def test_find_fsdp_finds_ring_over_beam_decay():
+    """FSDP finder ignores the beam shoulder and locates a weak ring bump."""
+    q = np.linspace(0.01, 1.1, 200)
+    Iq = 200 * np.exp(-q / 0.08) + 5 * np.exp(-((q - 0.6) / 0.06) ** 2) + 0.5
+    qp, conf = fds.find_fsdp(q, Iq)
+    assert abs(qp - 0.6) < 0.05 and conf > 3.0
+    # pure monotonic decay -> low confidence (no real ring)
+    qp2, conf2 = fds.find_fsdp(q, 200 * np.exp(-q / 0.08) + 0.5)
+    assert conf2 < conf                                # weaker than a real bump

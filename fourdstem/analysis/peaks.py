@@ -151,3 +151,43 @@ def peak_centroid(x, y, x_min, x_max):
     if w.sum() <= 0:
         return float("nan")
     return float((x[sel] * w).sum() / w.sum())
+
+
+def find_fsdp(q, Iq, q_lo=0.30, q_hi=0.95, smooth=7):
+    """Locate the first sharp diffraction peak (FSDP) of an amorphous I(q).
+
+    The direct beam makes I(q) fall steeply, so a plain argmax lands on the beam
+    shoulder, not a ring. A smooth background is fit in LOG space (where the beam
+    decay is nearly linear) with iterative down-weighting of points above the fit,
+    so the baseline follows the background but NOT the ring; the largest residual
+    bump is then taken WITHIN a physical window ``[q_lo, q_hi]`` (1/Å) — for Li
+    compounds the nearest neighbour ~1.4-4 Å maps, via q≈1.23/r, to ~0.3-0.9 1/Å.
+
+    Returns ``(q_peak, confidence)`` where ``confidence`` is the residual bump
+    height over the residual noise (MAD, floored by the window dynamic range).
+    Confidence below ~5 means "no clear ring — do not trust as a calibration
+    point" (the amorphous signal is too weak here).
+    """
+    q = np.asarray(q, float)
+    Iq = np.asarray(Iq, float)
+    m = (q >= q_lo) & (q <= q_hi) & np.isfinite(Iq)
+    if m.sum() < 5:
+        return float("nan"), 0.0
+    logI = np.log(np.clip(Iq, 1e-6, None))
+    w = np.ones_like(q)
+    deg = min(4, max(2, q.size // 20))
+    p = np.polyfit(q, logI, deg, w=w)
+    for _ in range(6):                              # iteratively keep background
+        fit = np.polyval(p, q)
+        r = logI - fit
+        s = np.std(r[w > 0]) + 1e-9
+        w = (r < 0.6 * s).astype(float)
+        p = np.polyfit(q, logI, deg, w=w)
+    base = np.exp(np.polyval(p, q))
+    res = Iq - base
+    qw, rw = q[m], res[m]
+    j = int(np.argmax(rw))
+    noise = np.median(np.abs(rw - np.median(rw))) * 1.4826
+    floor = 0.02 * float(np.nanmax(Iq[m]) - np.nanmin(Iq[m]))
+    conf = float(rw[j] / (max(noise, floor) + 1e-12))
+    return float(qw[j]), conf
