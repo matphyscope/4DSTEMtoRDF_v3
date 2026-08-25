@@ -153,7 +153,7 @@ def peak_centroid(x, y, x_min, x_max):
     return float((x[sel] * w).sum() / w.sum())
 
 
-def find_fsdp(q, Iq, q_lo=0.30, q_hi=0.95, smooth=7):
+def find_fsdp(q, Iq, q_lo=0.30, q_hi=0.95, smooth=7, return_curves=False):
     """Locate the first sharp diffraction peak (FSDP) of an amorphous I(q).
 
     The direct beam makes I(q) fall steeply, so a plain argmax lands on the beam
@@ -190,4 +190,6 @@ def find_fsdp(q, Iq, q_lo=0.30, q_hi=0.95, smooth=7):
     noise = np.median(np.abs(rw - np.median(rw))) * 1.4826
     floor = 0.02 * float(np.nanmax(Iq[m]) - np.nanmin(Iq[m]))
     conf = float(rw[j] / (max(noise, floor) + 1e-12))
+    if return_curves:
+        return float(qw[j]), conf, base, (Iq - base)
     return float(qw[j]), conf
