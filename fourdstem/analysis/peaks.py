@@ -186,10 +186,19 @@ def find_fsdp(q, Iq, q_lo=0.30, q_hi=0.95, smooth=7, return_curves=False):
     base = np.exp(np.polyval(p, q))
     res = Iq - base
     qw, rw = q[m], res[m]
-    j = int(np.argmax(rw))
     noise = np.median(np.abs(rw - np.median(rw))) * 1.4826
     floor = 0.02 * float(np.nanmax(Iq[m]) - np.nanmin(Iq[m]))
-    conf = float(rw[j] / (max(noise, floor) + 1e-12))
+    scale = max(noise, floor) + 1e-12
+    # A real ring is an INTERIOR local maximum (rises then falls). The residual of
+    # an under-fit beam tail decreases monotonically into the window and would give
+    # a high value at the boundary — reject that by requiring a prominent peak.
+    from scipy.signal import find_peaks
+    pk, props = find_peaks(rw, prominence=scale)
+    if pk.size:
+        b = int(pk[np.argmax(props["prominences"])])
+        qpeak, conf = float(qw[b]), float(props["prominences"][np.argmax(props["prominences"])] / scale)
+    else:
+        qpeak, conf = float("nan"), 0.0          # no interior ring bump
     if return_curves:
-        return float(qw[j]), conf, base, (Iq - base)
-    return float(qw[j]), conf
+        return qpeak, conf, base, (Iq - base)
+    return qpeak, conf
