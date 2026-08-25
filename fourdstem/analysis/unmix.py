@@ -162,14 +162,17 @@ def compound_ring_q(compound):
     return [(1.0 / d, w) for d, w in COMPOUND_RINGS[compound]]
 
 
-def match_rings(meas_q, compounds=None, tol=0.03):
+def match_rings(meas_q, compounds=None, tol=0.04, sigma=0.02):
     """Rank candidate compounds by how well their rings match measured ring q's.
 
     ``meas_q`` : measured ring positions (1/Å, e.g. from :func:`find_fsdp`).
-    For each compound, sum the intensities of its rings that fall within ``tol``
-    of any measured ring (coverage), and note unmatched STRONG compound rings
-    that *should* have appeared. Returns a list sorted by score, each entry
-    ``(compound, score, matched_q, missing_strong_q)``.
+    Each of a compound's rings within ``tol`` of a measured ring contributes its
+    intensity weighted by a Gaussian of the position mismatch (``sigma``), so a
+    closer ring scores higher than a merely in-tolerance one. Strong compound
+    rings (intensity >= 0.6) with no measured counterpart are listed as
+    ``missing`` — their absence argues against that (crystalline) phase. Returns
+    entries ``(compound, score, matched_q, missing_strong_q, min_dq)`` sorted by
+    score; ``min_dq`` is the closest single ring mismatch (position tie-break).
     """
     meas = np.atleast_1d(np.asarray(meas_q, float))
     meas = meas[np.isfinite(meas)]
@@ -180,12 +183,15 @@ def match_rings(meas_q, compounds=None, tol=0.03):
         wsum = sum(w for _, w in rings) + 1e-12
         score = 0.0
         matched, missing = [], []
+        min_dq = float("inf")
         for d, w in rings:
             qc = 1.0 / d
-            if meas.size and np.min(np.abs(meas - qc)) <= tol:
-                score += w
+            dq = float(np.min(np.abs(meas - qc))) if meas.size else float("inf")
+            min_dq = min(min_dq, dq)
+            if dq <= tol:
+                score += w * np.exp(-0.5 * (dq / sigma) ** 2)
                 matched.append(round(qc, 3))
-            elif w >= 0.6:                       # a strong ring that is absent
+            elif w >= 0.6:
                 missing.append(round(qc, 3))
-        out.append((c, score / wsum, matched, missing))
+        out.append((c, score / wsum, matched, missing, round(min_dq, 3)))
     return sorted(out, key=lambda x: -x[1])
