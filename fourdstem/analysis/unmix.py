@@ -157,12 +157,27 @@ COMPOUND_RINGS = {
 }
 
 
-def compound_ring_q(compound):
+# Substrate / commonly co-occurring crystalline phases. The sample sits on a Cu
+# grid ("P-Cu"), so Cu and its oxides can contribute Bragg rings and MUST be in
+# the candidate set for the crystalline (MAX) analysis. d = a/sqrt(h^2+k^2+l^2)
+# for the cubic ones; intensities are rough powder relatives.
+SUBSTRATE_RINGS = {
+    "Cu":   [(2.087, 1.0), (1.808, 0.46), (1.278, 0.20), (1.090, 0.17)],
+    "Cu2O": [(2.465, 1.0), (2.135, 0.37), (3.019, 0.09), (1.510, 0.27), (1.287, 0.17)],
+    "CuO":  [(2.523, 1.0), (2.323, 0.96), (2.751, 0.30), (1.866, 0.25), (1.505, 0.30)],
+    "Li":   [(2.482, 1.0), (1.755, 0.15), (1.433, 0.25)],
+}
+# Everything the crystalline (MAX) matcher may consider: Li compounds + substrate.
+ALL_RINGS = {**COMPOUND_RINGS, **SUBSTRATE_RINGS}
+
+
+def compound_ring_q(compound, rings=None):
     """Main-ring positions of a compound as ``[(q=1/d, intensity), ...]`` (1/Å)."""
-    return [(1.0 / d, w) for d, w in COMPOUND_RINGS[compound]]
+    tbl = rings if rings is not None else ALL_RINGS
+    return [(1.0 / d, w) for d, w in tbl[compound]]
 
 
-def match_rings(meas_q, compounds=None, tol=0.04, sigma=0.02):
+def match_rings(meas_q, compounds=None, tol=0.04, sigma=0.02, rings=None):
     """Rank candidate compounds by how well their rings match measured ring q's.
 
     ``meas_q`` : measured ring positions (1/Å, e.g. from :func:`find_fsdp`).
@@ -176,15 +191,16 @@ def match_rings(meas_q, compounds=None, tol=0.04, sigma=0.02):
     """
     meas = np.atleast_1d(np.asarray(meas_q, float))
     meas = meas[np.isfinite(meas)]
-    names = list(compounds) if compounds is not None else list(COMPOUND_RINGS)
+    tbl = rings if rings is not None else COMPOUND_RINGS
+    names = list(compounds) if compounds is not None else list(tbl)
     out = []
     for c in names:
-        rings = COMPOUND_RINGS[c]
-        wsum = sum(w for _, w in rings) + 1e-12
+        crings = tbl[c]
+        wsum = sum(w for _, w in crings) + 1e-12
         score = 0.0
         matched, missing = [], []
         min_dq = float("inf")
-        for d, w in rings:
+        for d, w in crings:
             qc = 1.0 / d
             dq = float(np.min(np.abs(meas - qc))) if meas.size else float("inf")
             min_dq = min(min_dq, dq)
@@ -197,7 +213,7 @@ def match_rings(meas_q, compounds=None, tol=0.04, sigma=0.02):
     return sorted(out, key=lambda x: -x[1])
 
 
-def synth_compound_iq(compound, q, sigma_q=0.04, normalize=True):
+def synth_compound_iq(compound, q, sigma_q=0.04, normalize=True, rings=None):
     """Expected diffraction-ring profile I_ring(q) for a compound.
 
     Gaussians at each ring position q=1/d weighted by intensity, broadened by
@@ -207,7 +223,8 @@ def synth_compound_iq(compound, q, sigma_q=0.04, normalize=True):
     """
     q = np.asarray(q, float)
     out = np.zeros_like(q)
-    for d, w in COMPOUND_RINGS[compound]:
+    tbl = rings if rings is not None else ALL_RINGS
+    for d, w in tbl[compound]:
         out += w * np.exp(-0.5 * ((q - 1.0 / d) / sigma_q) ** 2)
     if normalize:
         n = np.linalg.norm(out)

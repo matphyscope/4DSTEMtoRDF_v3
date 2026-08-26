@@ -862,3 +862,13 @@ def test_synth_compound_iq_peaks_at_ring_positions():
     iq = fds.synth_compound_iq("LiF", q, sigma_q=0.02)
     qpk = q[np.argmax(iq)]
     assert abs(qpk - 1 / 2.324) < 0.02          # LiF strongest ring d=2.324 A
+
+
+def test_substrate_rings_explain_low_d_ring():
+    """A d~1.50 A ring (q~0.665) is copper oxide (Cu2O/CuO), not a Li compound."""
+    ranked = fds.match_rings([0.665], rings=fds.ALL_RINGS, tol=0.02)
+    top = ranked[0][0]
+    assert top in ("Cu2O", "CuO")
+    # and the d=4.18 ring stays a Li compound (Cu phases cannot reach d>3.3)
+    ranked2 = fds.match_rings([0.239], rings=fds.ALL_RINGS, tol=0.02)
+    assert ranked2[0][0] in ("Li2CO3", "Li3N")

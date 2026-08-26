@@ -67,7 +67,7 @@ from .analysis import (
     RDFConfig, RDFResult, scattering_terms, damping_window, sine_ft,
     reduce_intensity, reduce_profiles, pattern_to_rdf, save_rdf, load_rdf,
     rdf_quality,
-    COMPOUND_SHELLS, synth_compound_rdf, build_references, unmix_nnls, COMPOUND_RINGS, compound_ring_q, match_rings, synth_compound_iq,
+    COMPOUND_SHELLS, synth_compound_rdf, build_references, unmix_nnls, COMPOUND_RINGS, SUBSTRATE_RINGS, ALL_RINGS, compound_ring_q, match_rings, synth_compound_iq,
     reference_degeneracy,
 )
 
@@ -113,7 +113,7 @@ __all__ = [
     "RDFConfig", "RDFResult", "scattering_terms", "damping_window", "sine_ft",
     "reduce_intensity", "reduce_profiles", "pattern_to_rdf", "save_rdf",
     "load_rdf", "rdf_quality",
-    "COMPOUND_SHELLS", "synth_compound_rdf", "build_references", "unmix_nnls", "COMPOUND_RINGS", "compound_ring_q", "match_rings", "synth_compound_iq",
+    "COMPOUND_SHELLS", "synth_compound_rdf", "build_references", "unmix_nnls", "COMPOUND_RINGS", "SUBSTRATE_RINGS", "ALL_RINGS", "compound_ring_q", "match_rings", "synth_compound_iq",
     "reference_degeneracy",
     # insitu
     "Series", "Frame", "coordinate_from_name", "track_peak",
