@@ -37,6 +37,7 @@ class PhaseEvidence:
     unique_d: list = field(default_factory=list)       # d only this phase explains
     missing_strong_d: list = field(default_factory=list)
     n_spots: int = 0                   # detected spots on this phase's rings
+    n_unique_spots: int = 0            # spots at a d only this phase can own
     amount: float = float("nan")       # mean thickness-normalized DF over material
     diag_d: float = float("nan")       # d (A) of the ring used for the location map
 
@@ -64,8 +65,8 @@ class DiffractionReport:
         print("phase verdicts (confirmed = owns a ring no other candidate explains):")
         for c in self.phases.values():
             print(f"  {c.phase:7s} {c.verdict:14s} score {c.score:.2f} | "
-                  f"unique d={c.unique_d} | matched {[round(x,2) for x in c.matched_d]} | "
-                  f"missing-strong {c.missing_strong_d} | {c.n_spots} spots")
+                  f"unique-ring d={c.unique_d} | matched {[round(x,2) for x in c.matched_d]} | "
+                  f"missing-strong {c.missing_strong_d} | spots {c.n_spots} ({c.n_unique_spots} unique)")
         if self.unexplained_d:
             print(f"unexplained rings d(A)={[round(d,2) for d in self.unexplained_d]} "
                   f"-> phase outside the candidate set?")
@@ -149,49 +150,64 @@ def detect_spots(max_pat, center, q_per_px, q_beam=0.15, q_max=1.15,
             for x, y in zip(xs, ys)]
 
 
-def score_phases(rings_q, spots_q, candidates=None, tol=0.045):
+def score_phases(rings_q, spots_q, candidates=None, tol=0.045, min_unique_spots=5):
     """Per-phase verdict from measured ring/spot positions.
 
-    A candidate scores by how many of its rings coincide (within ``tol``, the
-    convergence-limited q resolution) with a measured ring, weighted by ring
-    intensity. A ring is **unique** to a phase when no other candidate has a ring
-    within ``tol`` of it — only a unique match promotes a phase to ``confirmed``.
-    Candidates whose *strong* rings are all absent are ``weak/absent``.
+    Ownership is decided at the **measured** position, not the tabulated one: a
+    measured ring/spot at ``q`` is *owned* by every candidate that has a ring
+    within ``tol`` (the convergence-limited q resolution), and is **unique** when
+    exactly one candidate owns it. A phase is ``confirmed`` when it uniquely owns
+    a measured ring, or at least ``min_unique_spots`` Bragg spots sit at a
+    d only it can produce; ``possible`` when it owns rings but none uniquely and
+    no strong ring is missing; ``weak/absent`` otherwise. This uses the sparse
+    spot signal (robust when the azimuthal ring is too weak to detect) and avoids
+    the tabulated-position pitfall where a near-neighbour phase steals uniqueness.
     """
     tbl = COMPOUND_RINGS
     names = list(candidates) if candidates is not None else list(CANDIDATES)
-    meas = np.asarray(rings_q, float)
+    meas = np.atleast_1d(np.asarray(rings_q, float))
+    meas = meas[np.isfinite(meas)]
     spq = np.asarray([s if np.isscalar(s) else s[-1] for s in spots_q], float)
 
-    def owners(qc):
-        return [c for c in names for d, w in tbl[c] if abs(1.0 / d - qc) <= tol]
+    def owners(qm):
+        return [c for c in names if any(abs(1.0 / d - qm) <= tol for d, _ in tbl[c])]
+
+    ring_owned = {c: [] for c in names}
+    ring_unique = {c: [] for c in names}
+    for qm in meas:
+        ow = owners(qm)
+        for c in ow:
+            ring_owned[c].append(round(1.0 / qm, 2))
+        if len(ow) == 1:
+            ring_unique[ow[0]].append(round(1.0 / qm, 2))
+    spot_owned = {c: 0 for c in names}
+    spot_unique = {c: 0 for c in names}
+    for qm in spq:
+        ow = owners(qm)
+        for c in ow:
+            spot_owned[c] += 1
+        if len(ow) == 1:
+            spot_unique[ow[0]] += 1
 
     out = {}
     for c in names:
-        wsum = sum(w for _, w in tbl[c]) + 1e-12
-        score = 0.0
-        matched, unique, missing = [], [], []
-        nsp = 0
-        for d, w in tbl[c]:
-            qc = 1.0 / d
-            hit = meas.size and np.min(np.abs(meas - qc)) <= tol
-            if hit:
-                score += w
-                matched.append(round(1.0 / qc, 2))
-                if owners(qc) == [c]:
-                    unique.append(round(1.0 / qc, 2))
-            elif w >= 0.6:
-                missing.append(round(d, 2))
-            if spq.size:
-                nsp += int(np.sum(np.abs(spq - qc) <= tol))
-        score /= wsum
-        if unique:
+        crings = tbl[c]
+        wsum = sum(w for _, w in crings) + 1e-12
+        score = sum(w for d, w in crings
+                    if meas.size and np.min(np.abs(meas - 1.0 / d)) <= tol) / wsum
+        missing = [round(d, 2) for d, w in crings if w >= 0.6 and
+                   (not meas.size or np.min(np.abs(meas - 1.0 / d)) > tol)]
+        uniq = sorted(set(ring_unique[c]), reverse=True)
+        nsp, nsp_u = spot_owned[c], spot_unique[c]
+        if uniq or nsp_u >= min_unique_spots:
             verdict = "confirmed"
-        elif matched and not missing:
+        elif ring_owned[c] and not missing:
             verdict = "possible"
         else:
             verdict = "weak/absent"
-        out[c] = PhaseEvidence(c, verdict, round(score, 3), matched, unique, missing, nsp)
+        out[c] = PhaseEvidence(c, verdict, round(score, 3),
+                               sorted(set(ring_owned[c]), reverse=True), uniq,
+                               missing, nsp, nsp_u)
     return out
 
 
