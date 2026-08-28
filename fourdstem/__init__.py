@@ -69,6 +69,8 @@ from .analysis import (
     rdf_quality,
     COMPOUND_SHELLS, synth_compound_rdf, build_references, unmix_nnls, COMPOUND_RINGS, SUBSTRATE_RINGS, ALL_RINGS, compound_ring_q, match_rings, synth_compound_iq,
     reference_degeneracy,
+    CANDIDATES, PhaseEvidence, DiffractionReport,
+    detect_rings, detect_spots, score_phases, analyze_diffraction,
 )
 
 # -- insitu -----------------------------------------------------------------
@@ -115,6 +117,8 @@ __all__ = [
     "load_rdf", "rdf_quality",
     "COMPOUND_SHELLS", "synth_compound_rdf", "build_references", "unmix_nnls", "COMPOUND_RINGS", "SUBSTRATE_RINGS", "ALL_RINGS", "compound_ring_q", "match_rings", "synth_compound_iq",
     "reference_degeneracy",
+    "CANDIDATES", "PhaseEvidence", "DiffractionReport",
+    "detect_rings", "detect_spots", "score_phases", "analyze_diffraction",
     # insitu
     "Series", "Frame", "coordinate_from_name", "track_peak",
     "track_multiple_peaks", "integrate_region",
