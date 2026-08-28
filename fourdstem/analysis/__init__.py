@@ -46,7 +46,7 @@ from .rdf import (
     rdf_quality,
 )
 from .phases import (
-    CANDIDATES, PhaseEvidence, DiffractionReport,
+    CANDIDATES, PHASE_DISTANCE, PhaseEvidence, DiffractionReport,
     detect_rings, detect_spots, score_phases, analyze_diffraction,
     PhaseReport, analyze_phases,
 )
@@ -78,7 +78,7 @@ __all__ = [
     "load_rdf", "rdf_quality",
     "COMPOUND_SHELLS", "synth_compound_rdf", "build_references", "unmix_nnls", "COMPOUND_RINGS", "SUBSTRATE_RINGS", "ALL_RINGS", "compound_ring_q", "match_rings", "synth_compound_iq",
     "reference_degeneracy",
-    "CANDIDATES", "PhaseEvidence", "DiffractionReport",
+    "CANDIDATES", "PHASE_DISTANCE", "PhaseEvidence", "DiffractionReport",
     "detect_rings", "detect_spots", "score_phases", "analyze_diffraction",
     "PhaseReport", "analyze_phases",
 ]

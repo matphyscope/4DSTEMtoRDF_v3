@@ -26,6 +26,13 @@ from .peaks import find_fsdp
 
 CANDIDATES = ["LiF", "Li2O", "Li3N", "Li2CO3", "Li2S"]
 
+# Diagnostic real-space interatomic distance per phase (A), for a per-phase
+# cepstral fluctuation map. LiF/Li2O/Li3N share ~2.0 A (nearest neighbour) so
+# their cepstral maps look alike — the honest resolution overlap; Li2CO3 (short
+# C-O 1.28) and Li2S (Li-S 2.47) sit at distinct distances and do separate.
+PHASE_DISTANCE = {"LiF": 2.01, "Li2O": 2.00, "Li3N": 1.94,
+                  "Li2CO3": 1.28, "Li2S": 2.47}
+
 
 # ---------------------------------------------------------------- data classes
 @dataclass
@@ -270,6 +277,8 @@ class PhaseReport:
     location_maps: dict                # phase -> scan-shaped map (or None)
     cepstral_bands: object             # list of fluctuation maps (or None)
     fbands: tuple
+    cepstral_phase_maps: dict = None   # phase -> cepstral fluctuation map at its
+                                       #   diagnostic distance (or None)
 
     @property
     def phases(self):
@@ -326,10 +335,19 @@ def analyze_phases(cube, q_per_px=None, center=None, candidates=None,
         loc[name] = m
         ev.amount = float(np.nanmean(m[material])) if material.any() else float(np.nanmean(m))
 
-    cep = None
+    cep = cep_phase = None
     if with_cepstral:
+        from .cepstral import fluctuation_image
         try:
             cep = fluctuation_multiband(cube, list(fbands), qpp)
         except Exception:
             cep = None
-    return PhaseReport(diff, center, material, loc, cep, fbands)
+        cep_phase = {}
+        for name in diff.phases:
+            d0 = PHASE_DISTANCE.get(name)
+            try:
+                cep_phase[name] = np.asarray(
+                    fluctuation_image(cube, max(0.4, d0 - 0.35), d0 + 0.35, qpp), float)
+            except Exception:
+                cep_phase[name] = None
+    return PhaseReport(diff, center, material, loc, cep, fbands, cep_phase)
