@@ -220,15 +220,21 @@ def index_pattern(gs, candidates=None, tol_g=0.03, tol_ang=5.0, min_spots=3,
 
 
 def crystallinity_map(cube, center=None, q_per_px=None, q_beam=0.20, q_max=1.15,
-                      chunk=1024, max_ann_px=20000):
-    """Per-scan-position 'spottiness': sharp Bragg peaks vs smooth ring/halo.
+                      chunk=512, min_bin=16):
+    """Per-scan-position 'spottiness': sharp Bragg spots vs smooth ring/halo.
 
-    In the structural annulus (``q_beam``..``q_max``), a single-crystal grain
-    makes a few localized spots (high top percentile over the median) while an
-    amorphous halo or a smooth powder ring is azimuthally flat. Returns a scan map
-    of ``(p99.5 - p50) / IQR`` over the annulus — high where a grain sits — used to
-    pick crystalline positions for grain grouping. Robust to lone hot pixels (uses
-    the 99.5th percentile, not the max). Computed in chunks to stay light.
+    Measured as the **azimuthal** fluctuation *within each radius*, not across
+    radii: a single-crystal grain concentrates intensity into discrete spots (a
+    ring at one radius is bright at a few angles and dark elsewhere -> high
+    azimuthal variance), while an amorphous halo or a uniform powder ring is
+    azimuthally flat. At each integer radius in the annulus the Poisson-corrected
+    normalized azimuthal variance ``(var - mean) / mean^2`` is formed (Poisson
+    subtraction and the ``mean^2`` denominator make it independent of dose /
+    thickness), and the map is the max over radii. This deliberately does NOT
+    track brightness/thickness — that was the failure of a radius-mixing metric.
+
+    Returns a scan map (high = spotty/crystalline). Radii with fewer than
+    ``min_bin`` pixels are skipped; computed in chunks to stay light.
     """
     from ..preprocess.masks import annular_mask
     from .virtual_image import _resolve_center
@@ -236,20 +242,28 @@ def crystallinity_map(cube, center=None, q_per_px=None, q_beam=0.20, q_max=1.15,
     if q_per_px is None:
         q_per_px = cube.calibration.q_per_px
     dp = cube.dp_shape
-    ann = np.asarray(annular_mask(dp, center, q_beam / q_per_px, q_max / q_per_px), bool).ravel()
-    idx = np.where(ann)[0]
-    if idx.size > max_ann_px:                          # subsample annulus for speed
-        idx = np.random.default_rng(0).choice(idx, max_ann_px, replace=False)
+    H, W = dp
+    yy, xx = np.mgrid[0:H, 0:W]
+    r = np.hypot(xx - center[0], yy - center[1])
+    ann = np.asarray(annular_mask(dp, center, q_beam / q_per_px, q_max / q_per_px), bool)
+    idx = np.where(ann.ravel())[0]
+    rbin = r.ravel()[idx].astype(int)
+    bins = [b for b in np.unique(rbin) if (rbin == b).sum() >= min_bin]
+    bin_cols = [np.where(rbin == b)[0] for b in bins]
     flat = cube._flat_patterns()
     N = flat.shape[0]
-    flat2 = np.asarray(flat, float).reshape(N, -1)
-    out = np.empty(N, float)
+    flat2 = flat.reshape(N, -1)                        # keep dtype (no full float64 copy)
+    out = np.zeros(N, float)
     for s in range(0, N, chunk):
-        blk = flat2[s:s + chunk][:, idx]
-        p50 = np.percentile(blk, 50, axis=1)
-        p995 = np.percentile(blk, 99.5, axis=1)
-        iqr = np.percentile(blk, 75, axis=1) - np.percentile(blk, 25, axis=1)
-        out[s:s + chunk] = (p995 - p50) / (iqr + 1e-9)
+        blk = np.asarray(flat2[s:s + chunk][:, idx], float)   # cast only this chunk
+        best = np.zeros(blk.shape[0])
+        for cols in bin_cols:
+            sub = blk[:, cols]
+            m = sub.mean(1)
+            v = sub.var(1)
+            cov = (v - m) / (m * m + 1e-9)             # Poisson-corrected, dose-independent
+            best = np.maximum(best, cov)
+        out[s:s + blk.shape[0]] = best
     scan = cube.scan_shape
     return out.reshape(scan) if scan else out
 
