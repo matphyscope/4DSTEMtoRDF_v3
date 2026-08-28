@@ -71,6 +71,7 @@ from .analysis import (
     reference_degeneracy,
     CANDIDATES, PHASE_DISTANCE, PhaseEvidence, DiffractionReport,
     detect_rings, detect_spots, score_phases, analyze_diffraction,
+    measure_ellipticity, diagnose_cube,
     PhaseReport, analyze_phases,
 )
 
@@ -120,6 +121,7 @@ __all__ = [
     "reference_degeneracy",
     "CANDIDATES", "PHASE_DISTANCE", "PhaseEvidence", "DiffractionReport",
     "detect_rings", "detect_spots", "score_phases", "analyze_diffraction",
+    "measure_ellipticity", "diagnose_cube",
     "PhaseReport", "analyze_phases",
     # insitu
     "Series", "Frame", "coordinate_from_name", "track_peak",

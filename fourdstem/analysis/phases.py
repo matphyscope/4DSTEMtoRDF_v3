@@ -268,6 +268,81 @@ def analyze_diffraction(mean_pat, max_pat, q_per_px, center=None,
                              crystallinity, phases, unexplained)
 
 
+def measure_ellipticity(max_pat, center, q_per_px, q_ring, n_wedge=36, dq=0.06):
+    """Ellipticity ``eps`` and major-axis angle (deg) of a powder ring.
+
+    Splits the ring band ``q_ring +/- dq`` into azimuthal wedges, takes the
+    intensity-weighted mean radius per wedge ``r(theta)``, and fits
+    ``r = r0 (1 + eps*cos 2(theta-phi))``. ``eps`` ~ (a-b)/(a+b): 0 = circular,
+    a few % = mild lens/projector distortion. Returns ``(eps, angle_deg)``.
+    """
+    H, W = max_pat.shape
+    yy, xx = np.mgrid[0:H, 0:W]
+    dx, dy = xx - center[0], yy - center[1]
+    r = np.hypot(dx, dy)
+    th = np.arctan2(dy, dx)
+    q = r * q_per_px
+    band = (q > q_ring - dq) & (q < q_ring + dq)
+    edges = np.linspace(-np.pi, np.pi, n_wedge + 1)
+    rr, ang = [], []
+    for i in range(n_wedge):
+        m = band & (th >= edges[i]) & (th < edges[i + 1])
+        if m.sum() < 5:
+            continue
+        w = np.clip(max_pat[m], 0, None) + 1e-9
+        rr.append(float(np.average(r[m], weights=w)))
+        ang.append(0.5 * (edges[i] + edges[i + 1]))
+    if len(rr) < 8:
+        return 0.0, 0.0
+    rr = np.asarray(rr); ang = np.asarray(ang)
+    A = np.c_[np.ones_like(ang), np.cos(2 * ang), np.sin(2 * ang)]
+    r0, B, C = np.linalg.lstsq(A, rr, rcond=None)[0]
+    return float(np.hypot(B, C) / max(r0, 1e-9)), float(np.degrees(0.5 * np.arctan2(C, B)))
+
+
+def diagnose_cube(cube, center=None, q_per_px=None, hot_threshold=8.0):
+    """Measure the corrections a scan might need, before applying any.
+
+    Returns a dict with ``wander_px`` (std of the per-position beam center of
+    mass — descan error), ``bad_pixel_frac`` (detector defects, consistently hot
+    across the scan), ``ellipticity`` / ``ellipse_angle_deg`` (powder-ring
+    distortion), and ``notes`` flagging which corrections are worth applying.
+    Measure first, correct only what is real — over-correcting weak data (e.g.
+    per-frame hot-pixel filtering) can delete genuine sparse Bragg spots.
+    """
+    from ..preprocess import center_of_mass, bad_pixel_map, median_pattern, clean_pattern
+    from .virtual_image import center_of_mass_map
+    qpp = q_per_px or cube.calibration.q_per_px
+    med = clean_pattern(np.asarray(median_pattern(cube), float), hot_threshold=hot_threshold)
+    if center is None:
+        center = center_of_mass(med, threshold=0.3)   # on cleaned pattern (hot px would bias it)
+    mx = clean_pattern(np.asarray(cube.max_dp(), float), hot_threshold=hot_threshold)
+    try:
+        comx, comy = center_of_mass_map(cube, center=center, normalize=True)
+        wander = float(np.nanstd(np.hypot(np.asarray(comx, float), np.asarray(comy, float))))
+    except Exception:
+        wander = float("nan")
+    try:
+        bad = float(bad_pixel_map(np.asarray(cube.max_dp(), float),
+                                  hot_threshold=hot_threshold).mean())
+    except Exception:
+        bad = float("nan")
+    rings = detect_rings(mx, center, qpp)
+    eps, phi = measure_ellipticity(mx, center, qpp, rings[0]) if rings else (0.0, 0.0)
+    notes = []
+    if np.isfinite(wander) and wander > 1.0:
+        notes.append(f"beam wander {wander:.1f}px > 1 -> per-position centering may help")
+    if np.isfinite(bad) and bad > 0:
+        notes.append(f"{100*bad:.2f}% detector defects -> repair (consistent-hot map, keeps real spots)")
+    if eps > 0.02:
+        notes.append(f"ring ellipticity {100*eps:.1f}% -> elliptical-q correction improves d accuracy")
+    if not notes:
+        notes.append("all within tolerance -> no correction needed (avoid over-processing)")
+    return dict(center=center, wander_px=wander, bad_pixel_frac=bad,
+                ellipticity=eps, ellipse_angle_deg=phi,
+                ring_used_A=(1.0 / rings[0] if rings else None), notes=notes)
+
+
 # ------------------------------------------------------- cube: adds "where"
 @dataclass
 class PhaseReport:
@@ -307,10 +382,10 @@ def analyze_phases(cube, q_per_px=None, center=None, candidates=None,
     from .cepstral import fluctuation_multiband
 
     qpp = q_per_px or cube.calibration.q_per_px
-    mean_pat = np.asarray(median_pattern(cube), float)
+    mean_pat = clean_pattern(np.asarray(median_pattern(cube), float), hot_threshold=hot_threshold)
     max_pat = clean_pattern(np.asarray(cube.max_dp(), float), hot_threshold=hot_threshold)
     if center is None:
-        center = center_of_mass(mean_pat, threshold=0.3)
+        center = center_of_mass(mean_pat, threshold=0.3)   # cleaned first (hot px biases center)
 
     diff = analyze_diffraction(mean_pat, max_pat, qpp, center=center, candidates=candidates)
 
