@@ -157,7 +157,8 @@ def detect_spots(max_pat, center, q_per_px, q_beam=0.15, q_max=1.15,
             for x, y in zip(xs, ys)]
 
 
-def score_phases(rings_q, spots_q, candidates=None, tol=0.045, min_unique_spots=5):
+def score_phases(rings_q, spots_q, candidates=None, tol=0.045, min_unique_spots=5,
+                 q_confirm_min=0.28):
     """Per-phase verdict from measured ring/spot positions.
 
     Ownership is decided at the **measured** position, not the tabulated one: a
@@ -169,6 +170,11 @@ def score_phases(rings_q, spots_q, candidates=None, tol=0.045, min_unique_spots=
     no strong ring is missing; ``weak/absent`` otherwise. This uses the sparse
     spot signal (robust when the azimuthal ring is too weak to detect) and avoids
     the tabulated-position pitfall where a near-neighbour phase steals uniqueness.
+
+    Only rings above ``q_confirm_min`` (small d) can *confirm* a phase: at low q
+    the ``tol`` window spans a huge d-range, so a beam-tail/noise bump there
+    "uniquely" matches whichever phase happens to own the sole large-d ring — a
+    false positive. Such low-q rings still count toward ``matched``/``possible``.
     """
     tbl = COMPOUND_RINGS
     names = list(candidates) if candidates is not None else list(CANDIDATES)
@@ -185,7 +191,7 @@ def score_phases(rings_q, spots_q, candidates=None, tol=0.045, min_unique_spots=
         ow = owners(qm)
         for c in ow:
             ring_owned[c].append(round(1.0 / qm, 2))
-        if len(ow) == 1:
+        if len(ow) == 1 and qm >= q_confirm_min:      # low-q uniqueness is unreliable
             ring_unique[ow[0]].append(round(1.0 / qm, 2))
     spot_owned = {c: 0 for c in names}
     spot_unique = {c: 0 for c in names}
