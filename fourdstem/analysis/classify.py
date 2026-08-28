@@ -25,6 +25,7 @@ the halo / ring / spot cases so the notebook can show both the maps and *why*.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
+import os
 import numpy as np
 
 from .phases import phase_ring_profile, CANDIDATES
@@ -44,22 +45,29 @@ def radial_stack(cube, center, q_per_px, q_max=1.2, nbin=180, chunk=512):
     yy, xx = np.mgrid[0:H, 0:W]
     r = np.hypot(xx - center[0], yy - center[1]).ravel()
     qpx = r * q_per_px
-    keep = qpx <= q_max
-    det = np.where(keep)[0]
+    det = np.where(qpx <= q_max)[0]
     b = np.clip((qpx[det] / q_max * nbin).astype(int), 0, nbin - 1)
-    counts = np.bincount(b, minlength=nbin).astype(float)
+    # sort detector pixels by radial bin so each bin is a contiguous run -> segment
+    # sums via reduceat (O(ndet) per pattern, not O(ndet*nbin))
+    srt = np.argsort(b, kind="stable")
+    det_s, b_s = det[srt], b[srt]
+    present, first = np.unique(b_s, return_index=True)          # bins that occur, run starts
+    counts = np.bincount(b_s, minlength=nbin).astype(np.float32)
     counts[counts == 0] = 1.0
-    # sparse-ish binning: build (ndet, nbin) normalized matrix in float32
-    M = np.zeros((det.size, nbin), np.float32)
-    M[np.arange(det.size), b] = 1.0
-    M /= counts[None, :]
     flat = cube._flat_patterns()
     N = flat.shape[0]
     flat2 = flat.reshape(N, -1)
-    prof = np.empty((N, nbin), np.float32)
-    for s in range(0, N, chunk):
-        blk = np.asarray(flat2[s:s + chunk][:, det], np.float32)
-        prof[s:s + blk.shape[0]] = blk @ M
+    prof = np.zeros((N, nbin), np.float32)
+
+    def _do(s):
+        blk = np.asarray(flat2[s:s + chunk][:, det_s], np.float32)
+        seg = np.add.reduceat(blk, first, axis=1)               # sum per occurring bin
+        prof[s:s + blk.shape[0], present] = seg / counts[present]
+
+    starts = list(range(0, N, chunk))
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(8, (os.cpu_count() or 1))) as ex:
+        list(ex.map(_do, starts))
     q = (np.arange(nbin) + 0.5) / nbin * q_max
     return q, prof
 
