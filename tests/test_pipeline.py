@@ -114,6 +114,23 @@ def test_average_pattern_over_scan_mask():
     assert np.allclose(avg, (cube[0, 0] + cube[1, 2]) / 2)
 
 
+def test_decompose_fractions_recovers_mixture():
+    # profile = Li2S + LiF fingerprints on a smooth background; NNLS decomposition
+    # must recover those two and zero the rest, and report a symmetric Gram.
+    q = np.linspace(0.0, 1.1, 400)
+    prof = 2.0 * fds.phase_ring_profile(q, "Li2S") + 1.5 * fds.phase_ring_profile(q, "LiF")
+    bg = 300 * np.exp(-q / 0.25) + 20
+    rng = np.random.default_rng(0)
+    I = bg + 60 * prof + rng.normal(0, 3, q.size)
+    r = fds.decompose_fractions(q, I)
+    f = r["fractions"]
+    assert f["Li2S"] > 0.4 and f["LiF"] > 0.1                 # both present phases found
+    assert f["Li2O"] < 0.05 and f["Li3N"] < 0.05 and f["Li2CO3"] < 0.05   # absent ~0
+    G = r["gram"]
+    assert np.allclose(np.diag(G), 1.0) and np.allclose(G, G.T)   # valid correlation matrix
+    assert abs(sum(f.values()) - 1.0) < 1e-6                  # fractions normalized
+
+
 def test_thickness_map_vacuum_referenced_recovers_ramp():
     # left third = vacuum (no scattering), rest = thickness ramp. A per-pixel
     # detector dark offset would fake a thick vacuum; vacuum referencing must
