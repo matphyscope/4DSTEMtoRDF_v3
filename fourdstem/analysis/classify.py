@@ -77,6 +77,7 @@ class PixelClassification:
     scan: tuple
     q: np.ndarray
     candidates: list
+    material: np.ndarray      # (Sy,Sx) bool, True = material (from the halo)
     halo: np.ndarray          # (Sy,Sx) amorphous strength
     ring: np.ndarray          # (Sy,Sx) sharp-ring strength
     spot: np.ndarray          # (Sy,Sx) azimuthal spottiness
@@ -153,7 +154,14 @@ def classify_pixels(cube, center=None, q_per_px=None, candidates=None, material=
     spot2d = np.asarray(crystallinity_map(cube, center=center, q_per_px=q_per_px,
                                           n_jobs=n_jobs), float)
 
-    mat = np.ones(scan, bool) if material is None else np.asarray(material, bool)
+    if material is None:                                      # derive material from the halo
+        from .virtual_image import _otsu_threshold
+        thr = _otsu_threshold(halo)
+        mat = halo2d > thr
+        if mat.mean() < 0.02 or mat.mean() > 0.98:           # degenerate -> fall back to a percentile
+            mat = halo2d > np.percentile(halo, 60)
+    else:
+        mat = np.asarray(material, bool)
     # ring phase accepted where score clears threshold and beats runner-up by margin
     ring_ok = mat & (best_score.reshape(scan) >= ring_thr) & \
         (best_score >= margin * second).reshape(scan)
@@ -185,7 +193,7 @@ def classify_pixels(cube, center=None, q_per_px=None, candidates=None, material=
         return tuple(int(v) for v in np.unravel_index(np.argmax(am), scan))
     examples = dict(halo=_argmax_in(halo2d), ring=_argmax_in(ring2d), spot=_argmax_in(spot2d))
 
-    return PixelClassification(scan=scan, q=q, candidates=names,
+    return PixelClassification(scan=scan, q=q, candidates=names, material=mat,
                                halo=halo2d, ring=ring2d, spot=spot2d,
                                phase_idx=phase_idx, phase_score=bscore2d,
                                tier=tier, indexed=indexed, examples=examples)
