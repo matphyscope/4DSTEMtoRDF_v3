@@ -32,7 +32,7 @@ from .phases import phase_ring_profile, CANDIDATES
 from .indexing import crystallinity_map, seed_positions, index_seeds
 
 
-def radial_stack(cube, center, q_per_px, q_max=1.2, nbin=180, chunk=512):
+def radial_stack(cube, center, q_per_px, q_max=1.2, nbin=180, chunk=512, n_jobs=1):
     """Radial profile ``I(q)`` for **every** scan position (vectorized).
 
     Returns ``(q, profiles)`` with ``q`` shape ``(nbin,)`` and ``profiles`` shape
@@ -65,9 +65,15 @@ def radial_stack(cube, center, q_per_px, q_max=1.2, nbin=180, chunk=512):
         prof[s:s + blk.shape[0], present] = seg / counts[present]
 
     starts = list(range(0, N, chunk))
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=min(8, (os.cpu_count() or 1))) as ex:
-        list(ex.map(_do, starts))
+    from .indexing import _resolve_jobs
+    nj = _resolve_jobs(n_jobs)
+    if nj > 1 and len(starts) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=nj) as ex:
+            list(ex.map(_do, starts))
+    else:
+        for s in starts:
+            _do(s)
     q = (np.arange(nbin) + 0.5) / nbin * q_max
     return q, prof
 
@@ -129,9 +135,23 @@ def classify_pixels(cube, center=None, q_per_px=None, candidates=None, material=
     scan = cube.scan_shape
     Sy, Sx = scan
 
-    q, prof = radial_stack(cube, center, q_per_px, q_max=q_max + 0.05, nbin=nbin)
+    from .indexing import _resolve_jobs
+    nj = _resolve_jobs(n_jobs)
+    q, prof = radial_stack(cube, center, q_per_px, q_max=q_max + 0.05, nbin=nbin, n_jobs=nj)
     win = max(5, int(nbin * bg_win_frac) | 1)
-    base = uniform_filter1d(minimum_filter1d(prof, win, axis=1), win, axis=1)
+
+    def _baseline(a):
+        return uniform_filter1d(minimum_filter1d(a, win, axis=1), win, axis=1)
+
+    if nj > 1 and prof.shape[0] > 2 * nj:              # thread the 1-D filters over row chunks
+        from concurrent.futures import ThreadPoolExecutor
+        rows = np.array_split(np.arange(prof.shape[0]), nj)
+        base = np.empty_like(prof)
+        with ThreadPoolExecutor(max_workers=nj) as ex:
+            for idx, b in zip(rows, ex.map(lambda r: _baseline(prof[r]), rows)):
+                base[idx] = b
+    else:
+        base = _baseline(prof)
     peaks = np.clip(prof - base, 0.0, None)
 
     sel = (q >= q_lo) & (q <= q_max)
