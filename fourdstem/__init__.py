@@ -71,6 +71,7 @@ from .analysis import (
     reference_degeneracy,
     CANDIDATES, PhaseEvidence, DiffractionReport,
     detect_rings, detect_spots, score_phases, analyze_diffraction,
+    PhaseReport, analyze_phases,
 )
 
 # -- insitu -----------------------------------------------------------------
@@ -119,6 +120,7 @@ __all__ = [
     "reference_degeneracy",
     "CANDIDATES", "PhaseEvidence", "DiffractionReport",
     "detect_rings", "detect_spots", "score_phases", "analyze_diffraction",
+    "PhaseReport", "analyze_phases",
     # insitu
     "Series", "Frame", "coordinate_from_name", "track_peak",
     "track_multiple_peaks", "integrate_region",

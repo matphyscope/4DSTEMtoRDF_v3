@@ -48,6 +48,7 @@ from .rdf import (
 from .phases import (
     CANDIDATES, PhaseEvidence, DiffractionReport,
     detect_rings, detect_spots, score_phases, analyze_diffraction,
+    PhaseReport, analyze_phases,
 )
 from .unmix import (
     COMPOUND_SHELLS,
@@ -79,4 +80,5 @@ __all__ = [
     "reference_degeneracy",
     "CANDIDATES", "PhaseEvidence", "DiffractionReport",
     "detect_rings", "detect_spots", "score_phases", "analyze_diffraction",
+    "PhaseReport", "analyze_phases",
 ]

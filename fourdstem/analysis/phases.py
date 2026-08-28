@@ -37,6 +37,8 @@ class PhaseEvidence:
     unique_d: list = field(default_factory=list)       # d only this phase explains
     missing_strong_d: list = field(default_factory=list)
     n_spots: int = 0                   # detected spots on this phase's rings
+    amount: float = float("nan")       # mean thickness-normalized DF over material
+    diag_d: float = float("nan")       # d (A) of the ring used for the location map
 
 
 @dataclass
@@ -241,3 +243,77 @@ def analyze_diffraction(mean_pat, max_pat, q_per_px, center=None,
     return DiffractionReport(center, q_per_px, float(halo_q), float(halo_conf),
                              [round(1.0 / qc, 3) for qc in rings_q], len(spots),
                              crystallinity, phases, unexplained)
+
+
+# ------------------------------------------------------- cube: adds "where"
+@dataclass
+class PhaseReport:
+    diffraction: DiffractionReport
+    center: tuple
+    material: object                   # scan-shaped bool
+    location_maps: dict                # phase -> scan-shaped map (or None)
+    cepstral_bands: object             # list of fluctuation maps (or None)
+    fbands: tuple
+
+    @property
+    def phases(self):
+        return self.diffraction.phases
+
+    def summary(self):
+        self.diffraction.summary()
+        print("spatial amount (mean thickness-normalized DF over material):")
+        for c in self.diffraction.phases.values():
+            loc = "map" if self.location_maps.get(c.phase) is not None else "--"
+            print(f"  {c.phase:7s} amount={c.amount:.3g} (ring d={c.diag_d:.2f} A) [{loc}]")
+
+
+def analyze_phases(cube, q_per_px=None, center=None, candidates=None,
+                   material=None, hot_threshold=8.0, with_cepstral=True,
+                   fbands=((1.0, 2.0), (2.0, 3.5), (3.5, 5.5))):
+    """Full phase screen from a 4D cube: identity + amount + spatial location.
+
+    Wraps :func:`analyze_diffraction` for the "what/how-much" and adds "where":
+    a thickness-normalized dark-field map per phase (at its diagnostic ring) and
+    cepstral fluctuation bands for structural separation. Returns a
+    :class:`PhaseReport`.
+    """
+    from ..preprocess import median_pattern, clean_pattern, center_of_mass
+    from .virtual_image import structural_map, material_mask as _material_mask
+    from .cepstral import fluctuation_multiband
+
+    qpp = q_per_px or cube.calibration.q_per_px
+    mean_pat = np.asarray(median_pattern(cube), float)
+    max_pat = clean_pattern(np.asarray(cube.max_dp(), float), hot_threshold=hot_threshold)
+    if center is None:
+        center = center_of_mass(mean_pat, threshold=0.3)
+
+    diff = analyze_diffraction(mean_pat, max_pat, qpp, center=center, candidates=candidates)
+
+    scan = cube.scan_shape
+    if material is None:
+        try:
+            material = np.asarray(_material_mask(cube, center=center), bool)
+        except Exception:
+            material = np.ones(scan, bool)
+
+    Tin, Tout = 0.2 / qpp, 1.0 / qpp
+    loc = {}
+    for name, ev in diff.phases.items():
+        if not ev.matched_d:
+            loc[name] = None
+            continue
+        d_sel = ev.unique_d[0] if ev.unique_d else ev.matched_d[0]  # diagnostic ring
+        ev.diag_d = float(d_sel)
+        qc = 1.0 / d_sel
+        m = np.asarray(structural_map(cube, center, (qc - 0.03) / qpp,
+                                      (qc + 0.03) / qpp, Tin, Tout), float)
+        loc[name] = m
+        ev.amount = float(np.nanmean(m[material])) if material.any() else float(np.nanmean(m))
+
+    cep = None
+    if with_cepstral:
+        try:
+            cep = fluctuation_multiband(cube, list(fbands), qpp)
+        except Exception:
+            cep = None
+    return PhaseReport(diff, center, material, loc, cep, fbands)
