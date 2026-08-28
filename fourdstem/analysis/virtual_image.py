@@ -185,17 +185,36 @@ def structural_map(cube, center=None, r_inner=None, r_outer=None,
     return np.asarray(ring) / total
 
 
-def thickness_map(cube, center=None, beam_radius=None):
+def thickness_map(cube, center=None, beam_radius=None, vacuum_mask=None,
+                  dark=None, ref="median", return_extras=False):
     """Relative thickness ``t/lambda = ln(I_total / I_transmitted)`` per position.
 
     As a sample thickens, more electrons scatter out of the direct beam, so the
     transmitted (central-disk) fraction decays ~ ``exp(-t/lambda)``; the log-ratio
     of the whole-pattern intensity to the direct-beam intensity therefore rises
     roughly linearly with thickness in mean-free-paths. It is a RATIO, so it is
-    independent of dose/beam current and comparable across scans. Absolute
-    thickness needs ``lambda`` (material + kV); for telling thick from thin
-    regions — e.g. a thin SEI shell vs a thick core — the relative map is what
-    matters. ``beam_radius`` (px) is the direct-beam disk; default ~ det/20.
+    independent of dose/beam current and comparable across scans.
+
+    **This is a RELATIVE map** (thick vs thin). Absolute nm needs ``lambda``, and
+    for a *convergent-beam, angle-separated, energy-unfiltered* 4D-STEM signal the
+    relevant lambda is a short elastic-dominated MFP — NOT the EELS inelastic
+    lambda (Malis) — so we do not convert to nm here. See the notes in the docs.
+
+    Vacuum referencing (recommended: pass ``vacuum_mask`` = complement of the
+    material mask, i.e. the no-sample positions):
+
+    * **dark self-calibration** — in vacuum essentially all intensity sits inside
+      the direct-beam disk, so the intensity *outside* the disk there is detector
+      dark/bias. ``dark`` (per-detector-pixel offset ``D``) is estimated from the
+      vacuum positions as ``median((I_total - I_beam)/(N_all - N_disk))`` and
+      subtracted from every position before the log-ratio. Pass ``dark`` explicitly
+      to override, or ``0`` to skip.
+    * **zero point** — the vacuum ``t/lambda`` (``ref`` = 'median' or 'mean') is
+      subtracted so no-sample positions read ~0 and the map is an honest
+      above-vacuum thickness.
+
+    ``beam_radius`` (px) is the direct-beam disk; default ~ det/20. With
+    ``return_extras`` also returns ``dict(dark, offset, beam_radius, n_disk)``.
 
     Returns a map over the scan grid (higher = thicker).
     """
@@ -203,14 +222,43 @@ def thickness_map(cube, center=None, beam_radius=None):
     dp = cube.dp_shape
     if beam_radius is None:
         beam_radius = max(3.0, min(dp) / 20.0)
+    disk = disk_mask(dp, center, beam_radius)
+    n_all = float(dp[0] * dp[1])
+    n_disk = float(np.asarray(disk, bool).sum())
     flat = cube._flat_patterns()
-    total = np.asarray(flat, float).reshape(flat.shape[0], -1).sum(1)
-    beam = np.asarray(cube.get_virtual_image(disk_mask(dp, center, beam_radius)),
-                      float).ravel()
+    raw_total = np.asarray(flat, float).reshape(flat.shape[0], -1).sum(1)
+    raw_beam = np.asarray(cube.get_virtual_image(disk), float).ravel()
+
+    vac = None
+    if vacuum_mask is not None:
+        vac = np.asarray(vacuum_mask, bool).ravel()
+        if vac.size != raw_total.size or vac.sum() == 0:
+            vac = None
+
+    # (a) self-estimate per-pixel dark from vacuum (outside-disk vacuum signal = dark)
+    if dark is None:
+        if vac is not None and n_all > n_disk:
+            outside = (raw_total[vac] - raw_beam[vac]) / (n_all - n_disk)
+            dark = max(float(np.median(outside)), 0.0)
+        else:
+            dark = 0.0
+    total = raw_total - dark * n_all
+    beam = raw_beam - dark * n_disk
     with np.errstate(divide="ignore", invalid="ignore"):
         t = np.log(np.clip(total, 1.0, None) / np.clip(beam, 1.0, None))
+
+    # (b) zero the vacuum so the map is thickness ABOVE vacuum
+    offset = 0.0
+    if vac is not None:
+        offset = float(np.median(t[vac]) if ref == "median" else np.mean(t[vac]))
+        t = t - offset
+
     scan = cube.scan_shape
-    return t.reshape(scan) if scan else t
+    tmap = t.reshape(scan) if scan else t
+    if return_extras:
+        return tmap, dict(dark=dark, offset=offset, beam_radius=float(beam_radius),
+                          n_disk=n_disk)
+    return tmap
 
 
 def center_of_mass_map(cube, center=None, mask=None, normalize=True):

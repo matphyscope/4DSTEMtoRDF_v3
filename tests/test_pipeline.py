@@ -114,6 +114,38 @@ def test_average_pattern_over_scan_mask():
     assert np.allclose(avg, (cube[0, 0] + cube[1, 2]) / 2)
 
 
+def test_thickness_map_vacuum_referenced_recovers_ramp():
+    # left third = vacuum (no scattering), rest = thickness ramp. A per-pixel
+    # detector dark offset would fake a thick vacuum; vacuum referencing must
+    # (a) self-estimate that dark and (b) zero the vacuum, recovering t/lambda.
+    from fourdstem.analysis.virtual_image import thickness_map
+    rng = np.random.default_rng(0)
+    Sy, Sx, H, W = 12, 18, 64, 64
+    yy, xx = np.mgrid[0:H, 0:W]
+    rr = np.hypot(xx - W / 2, yy - H / 2)
+    beam = np.exp(-rr ** 2 / (2 * 1.6 ** 2))          # sharp probe, well inside disk
+    halo = np.exp(-(rr - 18) ** 2 / (2 * 3.0 ** 2))
+    D_true, cur = 2.0, 4000.0
+    cube = np.empty((Sy, Sx, H, W), np.float32)
+    tl_true = np.zeros((Sy, Sx))
+    for iy in range(Sy):
+        for ix in range(Sx):
+            tl = 0.0 if ix < Sx // 3 else 0.2 + 2.0 * (ix - Sx // 3) / (Sx - Sx // 3)
+            tl_true[iy, ix] = tl
+            f = 1 - np.exp(-tl)
+            pat = cur * ((1 - f) * beam / beam.sum() + f * halo / halo.sum())
+            cube[iy, ix] = np.clip(pat + D_true + 0.3 * rng.standard_normal((H, W)), 0, None)
+    dc = fds.from_array(cube, q_per_px=0.02)
+    vac = np.zeros((Sy, Sx), bool); vac[:, :Sx // 3] = True
+    t_raw = thickness_map(dc, beam_radius=7.0)
+    t, ex = thickness_map(dc, beam_radius=7.0, vacuum_mask=vac, return_extras=True)
+    assert ex["dark"] == pytest.approx(D_true, abs=0.5)      # dark self-calibrated
+    assert abs(t_raw[vac].mean()) > 1.0                       # dark fakes thick vacuum
+    assert abs(t[vac].mean()) < 0.2                           # ...corrected to ~0
+    corr = np.corrcoef(t[~vac].ravel(), tl_true[~vac].ravel())[0, 1]
+    assert corr > 0.95                                        # recovers the ramp
+
+
 def test_structural_map_cancels_brightness():
     # 4D: left half ring at r=8, right half ring at r=13; a per-position
     # brightness ramp. structural_map (ring/total) should reveal the structural
