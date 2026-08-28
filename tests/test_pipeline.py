@@ -191,6 +191,45 @@ def test_index_grains_end_to_end():
     assert any(g["best"]["phase"] == "LiF" for g in indexed)
 
 
+def test_vacuum_referenced_halo_detector():
+    # amorphous halo at r=15 (q=0.3) in material, beam-only vacuum, with a
+    # brightness (thickness) gradient. A vacuum-referenced ring detector must
+    # separate material from vacuum cleanly at a sigma cutoff, and the peak-above-
+    # flank makes the DETECTION insensitive to the brightness ramp.
+    from fourdstem.analysis.detectors import detector_map, strict_vacuum_mask, amorphous_halo_peaks
+    from fourdstem.analysis.classify import radial_stack
+    H = W = 96
+    cx, cy = W / 2, H / 2
+    q_per_px = 0.02
+    yy, xx = np.mgrid[0:H, 0:W]
+    rr = np.hypot(xx - cx, yy - cy)
+    beam = 30 * np.exp(-rr ** 2 / (2 * 2.5 ** 2))
+    halo = np.exp(-(rr - 15) ** 2 / (2 * 4.0 ** 2))
+    Sy, Sx = 20, 20
+    rng = np.random.default_rng(0)
+    cube = np.empty((Sy, Sx, H, W), np.float32)
+    truth = np.zeros((Sy, Sx), bool)
+    for iy in range(Sy):
+        for ix in range(Sx):
+            bright = 1 + 3 * ix / Sx
+            if iy < Sy - 5:
+                base = bright * (beam + 2 * halo); truth[iy, ix] = True
+            else:
+                base = 0.9 * bright * beam
+            cube[iy, ix] = np.clip(base + 0.1 * np.sqrt(np.clip(base, 0, None)) *
+                                   rng.standard_normal((H, W)), 0, None)
+    dc = fds.from_array(cube, q_per_px=q_per_px)
+    vac = strict_vacuum_mask(dc, center=(cx, cy), pctl=15)
+    assert 0.1 <= vac.mean() <= 0.2
+    q, prof = radial_stack(dc, (cx, cy), q_per_px, q_max=1.2, nbin=200)
+    peaks = amorphous_halo_peaks(q, prof[truth.ravel()].mean(0))
+    assert any(abs(p - 0.30) < 0.05 for p in peaks)          # halo radius found
+    sig, _ = detector_map(dc, (cx, cy), q_per_px, 0.30, dq=0.04,
+                          vacuum_mask=vac, _stack=(q, prof))
+    assert (sig[truth] > 3).mean() > 0.9                     # material above 3 sigma
+    assert (sig[~truth] > 3).mean() < 0.1                    # vacuum below cutoff
+
+
 def test_classify_pixels_tiers_and_examples():
     # per-pixel classification: a crystalline LiF corner should reach predicted/
     # confirmed LiF, amorphous material should be 'weak', vacuum 'none', and one

@@ -58,6 +58,7 @@ from .indexing import (
     seed_positions, index_seeds,
 )
 from .classify import radial_stack, classify_pixels, PixelClassification
+from .detectors import (strict_vacuum_mask, peak_above_flank, significance, detector_map, amorphous_halo_peaks)
 from .unmix import (
     COMPOUND_SHELLS,
     synth_compound_rdf,
@@ -93,6 +94,7 @@ __all__ = [
     "crystallinity_map", "label_grains", "grain_patterns", "index_grains",
     "seed_positions", "index_seeds",
     "radial_stack", "classify_pixels", "PixelClassification",
+    "strict_vacuum_mask", "peak_above_flank", "significance", "detector_map", "amorphous_halo_peaks",
     "measure_ellipticity", "diagnose_cube",
     "PhaseReport", "analyze_phases",
 ]
