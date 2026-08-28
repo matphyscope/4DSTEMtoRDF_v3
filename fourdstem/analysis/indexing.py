@@ -103,7 +103,7 @@ def _zone_completeness(zone_refl, th_ref, gm, gang, i0, mirror, tol_g, tol_r, gm
     return n_seen / max(n_pred, 1)
 
 
-def index_gvectors(gs, phase, tol_g=0.03, tol_ang=5.0, min_spots=3,
+def index_gvectors(gs, phase, tol_g=0.03, tol_ang=5.0, min_spots=2,
                    max_spots=30, n_basis=6):
     """Index measured g-vectors ``gs`` (N,2 in 1/A, relative to the beam) as ``phase``.
 
@@ -189,8 +189,8 @@ def index_gvectors(gs, phase, tol_g=0.03, tol_ang=5.0, min_spots=3,
     return best
 
 
-def index_pattern(gs, candidates=None, tol_g=0.03, tol_ang=5.0, min_spots=3,
-                  min_score=0.6, min_complete=0.6):
+def index_pattern(gs, candidates=None, tol_g=0.03, tol_ang=5.0, min_spots=2,
+                  min_score=0.6, min_complete=0.6, confirm_min_spots=4):
     """Index a spot set against every candidate; return the ranked results.
 
     ``gs`` are measured g-vectors (N,2, 1/A, relative to the beam center). Returns
@@ -213,7 +213,8 @@ def index_pattern(gs, candidates=None, tol_g=0.03, tol_ang=5.0, min_spots=3,
     best = None
     if results:
         top = dict(results[0])
-        top["indexed"] = bool(top["score"] >= min_score and top["n_matched"] >= min_spots
+        top["indexed"] = bool(top["score"] >= min_score
+                              and top["n_matched"] >= confirm_min_spots
                               and top.get("completeness", 0.0) >= min_complete)
         best = top
     return best, results
@@ -341,6 +342,76 @@ def index_grains(cube, center=None, q_per_px=None, cryst_map=None, mask=None,
         grains.append(dict(label=g, size=int((labels == g).sum()),
                            n_spots=len(gs), best=best, results=results))
     return grains, labels
+
+
+def seed_positions(score_maps, mask=None, min_distance=2, threshold_pctl=85.0,
+                   max_seeds=80):
+    """Grain-seed scan positions = local maxima of the combined score maps.
+
+    ``score_maps`` is a list of scan maps whose bright spots mark likely grains —
+    e.g. the crystallinity (spottiness) map AND the per-phase NBD/cepstral
+    location maps, so **positions a phase is expected at are seeded even when the
+    global spottiness there is modest**. Each map is percentile-normalized and the
+    maximum taken; local maxima (in an ``2*min_distance+1`` window) above the
+    ``threshold_pctl`` percentile within ``mask`` are returned as ``(iy, ix)``,
+    strongest first, up to ``max_seeds``.
+    """
+    from scipy.ndimage import maximum_filter
+    maps = [np.asarray(m, float) for m in score_maps if m is not None]
+    if not maps:
+        return []
+    shape = maps[0].shape
+    m = np.ones(shape, bool) if mask is None else np.asarray(mask, bool)
+    S = np.zeros(shape)
+    for a in maps:
+        v = np.where(m, a, np.nan)
+        lo, hi = np.nanpercentile(v, 5), np.nanpercentile(v, 99)
+        S = np.maximum(S, np.clip((np.nan_to_num(a) - lo) / (hi - lo + 1e-9), 0, 1))
+    thr = np.percentile(S[m], threshold_pctl) if m.any() else np.inf
+    ismax = (S == maximum_filter(S, size=2 * min_distance + 1))
+    peaks = ismax & m & (S >= thr)
+    ys, xs = np.where(peaks)
+    order = np.argsort(-S[ys, xs])
+    return [(int(ys[i]), int(xs[i])) for i in order[:max_seeds]]
+
+
+def index_seeds(cube, seeds, center=None, q_per_px=None, window=1, candidates=None,
+                mask=None, spot_kwargs=None, index_kwargs=None):
+    """Index a diffraction pattern at each seed scan position.
+
+    For every ``(iy, ix)`` seed, the patterns in a ``(2*window+1)`` neighborhood
+    (within ``mask``) are averaged, spots are detected, and :func:`index_pattern`
+    is run. Reports **every** seed — including weak ones with only 2 spots — so an
+    expected position is checked and marked even when it does not confirm. Returns
+    a list of dicts ``{pos, n_spots, best, results}`` (``best`` may be ``None`` or
+    have ``indexed=False``).
+    """
+    from .phases import detect_spots
+    from .virtual_image import _resolve_center, average_pattern
+    center = _resolve_center(cube, center)
+    if q_per_px is None:
+        q_per_px = cube.calibration.q_per_px
+    scan = cube.scan_shape
+    m = np.ones(scan, bool) if mask is None else np.asarray(mask, bool)
+    spot_kwargs = spot_kwargs or {}
+    index_kwargs = index_kwargs or {}
+    out = []
+    for (iy, ix) in seeds:
+        sel = np.zeros(scan, bool)
+        y0, y1 = max(0, iy - window), min(scan[0], iy + window + 1)
+        x0, x1 = max(0, ix - window), min(scan[1], ix + window + 1)
+        sel[y0:y1, x0:x1] = True
+        sel &= m
+        if not sel.any():
+            continue
+        pat = np.asarray(average_pattern(cube, sel), float)
+        spots = detect_spots(pat, center, q_per_px, **spot_kwargs)
+        gs = spots_to_gvectors(spots, center, q_per_px)
+        best, results = (None, [])
+        if len(gs) >= 2:
+            best, results = index_pattern(gs, candidates=candidates, **index_kwargs)
+        out.append(dict(pos=(iy, ix), n_spots=len(gs), best=best, results=results))
+    return out
 
 
 def spots_to_gvectors(spots, center, q_per_px):

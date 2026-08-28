@@ -191,6 +191,52 @@ def test_index_grains_end_to_end():
     assert any(g["best"]["phase"] == "LiF" for g in indexed)
 
 
+def test_seed_positions_and_index_seeds():
+    # reuse the grain-corner cube: seeding from a location-like map must place a
+    # seed in the crystalline corner, and index_seeds must index it as LiF and
+    # still report weak (few-spot) seeds rather than dropping them.
+    from fourdstem.analysis.indexing import _recip_basis, LATTICE
+    B = _recip_basis(LATTICE["LiF"])
+    H = W = 96
+    cx, cy = W / 2, H / 2
+    q_per_px = 0.02
+    yy, xx = np.mgrid[0:H, 0:W]
+    rr = np.hypot(xx - cx, yy - cy)
+    beam = 20 * np.exp(-rr ** 2 / (2 * 2.0 ** 2))
+    halo = 3 * np.exp(-(rr - 22) ** 2 / (2 * 4.0 ** 2))
+    spot_img = np.zeros((H, W))
+    for h in range(-3, 4):
+        for k in range(-3, 4):
+            if (h, k) == (0, 0) or not (h % 2 == k % 2 == 0):
+                continue
+            g = h * B[0] + k * B[1]
+            px, py = cx + g[0] / q_per_px, cy + g[1] / q_per_px
+            if 0 <= px < W and 0 <= py < H:
+                spot_img += 30 * np.exp(-((xx - px) ** 2 + (yy - py) ** 2) / (2 * 1.4 ** 2))
+    Sy, Sx = 12, 12
+    rng = np.random.default_rng(0)
+    cube = np.empty((Sy, Sx, H, W), np.float32)
+    locmap = np.zeros((Sy, Sx))
+    for iy in range(Sy):
+        for ix in range(Sx):
+            base = beam + halo
+            if iy < 3 and ix < 3:
+                base = beam + spot_img
+                locmap[iy, ix] = 1.0                    # a "location map" peak on the grain
+            cube[iy, ix] = np.clip(base + 0.2 * rng.standard_normal((H, W)), 0, None)
+    dc = fds.from_array(cube, q_per_px=q_per_px)
+    seeds = fds.seed_positions([locmap], min_distance=1, threshold_pctl=90)
+    assert any(iy < 3 and ix < 3 for (iy, ix) in seeds)   # seeded on the grain
+    res = fds.index_seeds(dc, seeds, center=(cx, cy), window=1,
+                          candidates=["LiF", "Li2O", "Li2S"],
+                          spot_kwargs=dict(n_mad=4.0),
+                          index_kwargs=dict(min_score=0.6, confirm_min_spots=4))
+    assert len(res) == len(seeds)                         # every seed reported
+    got = [r for r in res if r["best"] and r["best"].get("indexed")
+           and r["best"]["phase"] == "LiF"]
+    assert got                                            # grain seed indexed as LiF
+
+
 def test_decompose_fractions_recovers_mixture():
     # profile = Li2S + LiF fingerprints on a smooth background; NNLS decomposition
     # must recover those two and zero the rest, and report a symmetric Gram.

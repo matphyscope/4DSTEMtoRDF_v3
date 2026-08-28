@@ -55,6 +55,7 @@ from .phases import (
 from .indexing import (
     index_gvectors, index_pattern, spots_to_gvectors, reflections as phase_reflections,
     crystallinity_map, label_grains, grain_patterns, index_grains,
+    seed_positions, index_seeds,
 )
 from .unmix import (
     COMPOUND_SHELLS,
@@ -89,6 +90,7 @@ __all__ = [
     "phase_ring_profile", "decompose_fractions",
     "index_gvectors", "index_pattern", "spots_to_gvectors", "phase_reflections",
     "crystallinity_map", "label_grains", "grain_patterns", "index_grains",
+    "seed_positions", "index_seeds",
     "measure_ellipticity", "diagnose_cube",
     "PhaseReport", "analyze_phases",
 ]
