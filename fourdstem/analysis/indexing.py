@@ -220,7 +220,7 @@ def index_pattern(gs, candidates=None, tol_g=0.03, tol_ang=5.0, min_spots=3,
 
 
 def crystallinity_map(cube, center=None, q_per_px=None, q_beam=0.20, q_max=1.15,
-                      chunk=1024):
+                      chunk=1024, max_ann_px=20000):
     """Per-scan-position 'spottiness': sharp Bragg peaks vs smooth ring/halo.
 
     In the structural annulus (``q_beam``..``q_max``), a single-crystal grain
@@ -238,6 +238,8 @@ def crystallinity_map(cube, center=None, q_per_px=None, q_beam=0.20, q_max=1.15,
     dp = cube.dp_shape
     ann = np.asarray(annular_mask(dp, center, q_beam / q_per_px, q_max / q_per_px), bool).ravel()
     idx = np.where(ann)[0]
+    if idx.size > max_ann_px:                          # subsample annulus for speed
+        idx = np.random.default_rng(0).choice(idx, max_ann_px, replace=False)
     flat = cube._flat_patterns()
     N = flat.shape[0]
     flat2 = np.asarray(flat, float).reshape(N, -1)
