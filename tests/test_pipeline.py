@@ -191,6 +191,55 @@ def test_index_grains_end_to_end():
     assert any(g["best"]["phase"] == "LiF" for g in indexed)
 
 
+def test_classify_pixels_tiers_and_examples():
+    # per-pixel classification: a crystalline LiF corner should reach predicted/
+    # confirmed LiF, amorphous material should be 'weak', vacuum 'none', and one
+    # representative pixel is picked for each of halo/ring/spot.
+    from fourdstem.analysis.indexing import _recip_basis, LATTICE
+    B = _recip_basis(LATTICE["LiF"])
+    H = W = 80
+    cx, cy = W / 2, H / 2
+    q_per_px = 0.02
+    yy, xx = np.mgrid[0:H, 0:W]
+    rr = np.hypot(xx - cx, yy - cy)
+    beam = 20 * np.exp(-rr ** 2 / (2 * 2.0 ** 2))
+    halo = 3 * np.exp(-(rr - 20) ** 2 / (2 * 4.0 ** 2))
+    spot = np.zeros((H, W))
+    for h in range(-3, 4):
+        for k in range(-3, 4):
+            if (h, k) == (0, 0) or not (h % 2 == k % 2 == 0):
+                continue
+            g = h * B[0] + k * B[1]
+            px, py = cx + g[0] / q_per_px, cy + g[1] / q_per_px
+            if 0 <= px < W and 0 <= py < H:
+                spot += 30 * np.exp(-((xx - px) ** 2 + (yy - py) ** 2) / (2 * 1.4 ** 2))
+    Sy, Sx = 16, 16
+    rng = np.random.default_rng(0)
+    cube = np.empty((Sy, Sx, H, W), np.float32)
+    mat = np.zeros((Sy, Sx), bool)
+    for iy in range(Sy):
+        for ix in range(Sx):
+            base = beam + halo
+            if 3 <= iy < 6 and 3 <= ix < 6:
+                base = beam + spot
+            if iy < Sy - 3:
+                mat[iy, ix] = True
+            cube[iy, ix] = np.clip(base + 0.2 * rng.standard_normal((H, W)), 0, None)
+    dc = fds.from_array(cube, q_per_px=q_per_px)
+    r = fds.classify_pixels(dc, center=(cx, cy), material=mat,
+                            candidates=["LiF", "Li2O", "Li2S"],
+                            spot_kwargs=dict(n_mad=4.0))
+    assert r.tier.shape == (Sy, Sx)
+    assert (r.tier == 0)[~mat].all()                      # vacuum -> none
+    assert (r.tier >= 2).any()                            # some predicted/confirmed
+    # the crystalline corner carries LiF predicted or confirmed
+    corner = r.phase_idx[3:6, 3:6]
+    assert (corner == r.candidates.index("LiF")).any()
+    for key in ("halo", "ring", "spot"):
+        iy, ix = r.examples[key]
+        assert mat[iy, ix]                                # examples are on material
+
+
 def test_seed_positions_and_index_seeds():
     # reuse the grain-corner cube: seeding from a location-like map must place a
     # seed in the crystalline corner, and index_seeds must index it as LiF and

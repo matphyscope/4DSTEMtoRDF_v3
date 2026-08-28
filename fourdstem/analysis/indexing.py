@@ -20,7 +20,18 @@ in :mod:`fourdstem.analysis.phases`): index the few grains, not every pixel.
 """
 from __future__ import annotations
 from functools import lru_cache
+import os
 import numpy as np
+
+
+def _resolve_jobs(n_jobs):
+    """Normalize an ``n_jobs`` spec to a positive worker count (``-1`` = all cores)."""
+    cpu = os.cpu_count() or 1
+    if n_jobs is None or n_jobs == 0:
+        return 1
+    if n_jobs < 0:
+        return max(1, cpu + 1 + n_jobs)          # -1 -> cpu
+    return min(n_jobs, cpu)
 
 # Unit cells (A, deg) + Bravais centering for the systematic-absence rule.
 LATTICE = {
@@ -221,7 +232,7 @@ def index_pattern(gs, candidates=None, tol_g=0.03, tol_ang=5.0, min_spots=2,
 
 
 def crystallinity_map(cube, center=None, q_per_px=None, q_beam=0.20, q_max=1.15,
-                      chunk=512, min_bin=16):
+                      chunk=512, min_bin=16, n_jobs=1):
     """Per-scan-position 'spottiness': sharp Bragg spots vs smooth ring/halo.
 
     Measured as the **azimuthal** fluctuation *within each radius*, not across
@@ -255,7 +266,8 @@ def crystallinity_map(cube, center=None, q_per_px=None, q_beam=0.20, q_max=1.15,
     N = flat.shape[0]
     flat2 = flat.reshape(N, -1)                        # keep dtype (no full float64 copy)
     out = np.zeros(N, float)
-    for s in range(0, N, chunk):
+
+    def _do_chunk(s):
         blk = np.asarray(flat2[s:s + chunk][:, idx], float)   # cast only this chunk
         best = np.zeros(blk.shape[0])
         for cols in bin_cols:
@@ -265,6 +277,16 @@ def crystallinity_map(cube, center=None, q_per_px=None, q_beam=0.20, q_max=1.15,
             cov = (v - m) / (m * m + 1e-9)             # Poisson-corrected, dose-independent
             best = np.maximum(best, cov)
         out[s:s + blk.shape[0]] = best
+
+    starts = list(range(0, N, chunk))
+    nj = _resolve_jobs(n_jobs)
+    if nj > 1 and len(starts) > 1:                     # numpy releases the GIL -> threads help
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=nj) as ex:
+            list(ex.map(_do_chunk, starts))
+    else:
+        for s in starts:
+            _do_chunk(s)
     scan = cube.scan_shape
     return out.reshape(scan) if scan else out
 
@@ -375,8 +397,15 @@ def seed_positions(score_maps, mask=None, min_distance=2, threshold_pctl=85.0,
     return [(int(ys[i]), int(xs[i])) for i in order[:max_seeds]]
 
 
+def _index_gs_job(args):
+    """Picklable worker: index one seed's g-vectors (runs in a subprocess)."""
+    pos, gs, candidates, index_kwargs = args
+    best, results = index_pattern(np.asarray(gs, float), candidates=candidates, **index_kwargs)
+    return dict(pos=pos, n_spots=len(gs), best=best, results=results)
+
+
 def index_seeds(cube, seeds, center=None, q_per_px=None, window=1, candidates=None,
-                mask=None, spot_kwargs=None, index_kwargs=None):
+                mask=None, spot_kwargs=None, index_kwargs=None, n_jobs=1):
     """Index a diffraction pattern at each seed scan position.
 
     For every ``(iy, ix)`` seed, the patterns in a ``(2*window+1)`` neighborhood
@@ -385,6 +414,11 @@ def index_seeds(cube, seeds, center=None, q_per_px=None, window=1, candidates=No
     expected position is checked and marked even when it does not confirm. Returns
     a list of dicts ``{pos, n_spots, best, results}`` (``best`` may be ``None`` or
     have ``indexed=False``).
+
+    ``n_jobs`` parallelizes the (CPU-bound) indexing across processes (``-1`` = all
+    cores). The per-seed pattern averaging + spot detection runs first in the main
+    process (it needs the cube); only the small g-vector lists are shipped to the
+    workers, so there is no large-array pickling.
     """
     from .phases import detect_spots
     from .virtual_image import _resolve_center, average_pattern
@@ -395,7 +429,8 @@ def index_seeds(cube, seeds, center=None, q_per_px=None, window=1, candidates=No
     m = np.ones(scan, bool) if mask is None else np.asarray(mask, bool)
     spot_kwargs = spot_kwargs or {}
     index_kwargs = index_kwargs or {}
-    out = []
+
+    prepared, direct = [], []
     for (iy, ix) in seeds:
         sel = np.zeros(scan, bool)
         y0, y1 = max(0, iy - window), min(scan[0], iy + window + 1)
@@ -407,11 +442,20 @@ def index_seeds(cube, seeds, center=None, q_per_px=None, window=1, candidates=No
         pat = np.asarray(average_pattern(cube, sel), float)
         spots = detect_spots(pat, center, q_per_px, **spot_kwargs)
         gs = spots_to_gvectors(spots, center, q_per_px)
-        best, results = (None, [])
         if len(gs) >= 2:
-            best, results = index_pattern(gs, candidates=candidates, **index_kwargs)
-        out.append(dict(pos=(iy, ix), n_spots=len(gs), best=best, results=results))
-    return out
+            prepared.append(((iy, ix), [tuple(map(float, g)) for g in gs],
+                             list(candidates) if candidates is not None else None, index_kwargs))
+        else:
+            direct.append(dict(pos=(iy, ix), n_spots=len(gs), best=None, results=[]))
+
+    nj = _resolve_jobs(n_jobs)
+    if nj > 1 and len(prepared) > 1:
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=nj) as ex:
+            indexed = list(ex.map(_index_gs_job, prepared))
+    else:
+        indexed = [_index_gs_job(a) for a in prepared]
+    return indexed + direct
 
 
 def spots_to_gvectors(spots, center, q_per_px):

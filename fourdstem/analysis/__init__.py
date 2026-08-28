@@ -57,6 +57,7 @@ from .indexing import (
     crystallinity_map, label_grains, grain_patterns, index_grains,
     seed_positions, index_seeds,
 )
+from .classify import radial_stack, classify_pixels, PixelClassification
 from .unmix import (
     COMPOUND_SHELLS,
     synth_compound_rdf,
@@ -91,6 +92,7 @@ __all__ = [
     "index_gvectors", "index_pattern", "spots_to_gvectors", "phase_reflections",
     "crystallinity_map", "label_grains", "grain_patterns", "index_grains",
     "seed_positions", "index_seeds",
+    "radial_stack", "classify_pixels", "PixelClassification",
     "measure_ellipticity", "diagnose_cube",
     "PhaseReport", "analyze_phases",
 ]
