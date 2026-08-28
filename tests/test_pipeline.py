@@ -131,6 +131,23 @@ def test_decompose_fractions_recovers_mixture():
     assert abs(sum(f.values()) - 1.0) < 1e-6                  # fractions normalized
 
 
+def test_decompose_halo_basis_prevents_fsdp_misassignment():
+    # strong amorphous FSDP (d~4A) + faint crystalline LiF. Without a halo basis
+    # NNLS mis-assigns the FSDP to a candidate; with it, the FSDP is absorbed and
+    # the crystalline fingerprint (LiF) is recovered with a much smaller residual.
+    q = np.linspace(0.0, 1.1, 400)
+    fsdp = 0.6 * np.exp(-0.5 * ((q - 0.25) / 0.06) ** 2)
+    lif = 0.03 * fds.phase_ring_profile(q, "LiF")
+    rng = np.random.default_rng(1)
+    I = 200 * np.exp(-q / 0.15) + 80 * (fsdp + lif) + rng.normal(0, 0.6, q.size)
+    r_no = fds.decompose_fractions(q, I, q_lo=0.20, halo_q=None)
+    r_yes = fds.decompose_fractions(q, I, q_lo=0.20, halo_q=0.25, halo_sigma=0.08)
+    assert r_yes["resid_frac"] < r_no["resid_frac"]           # halo basis fits better
+    assert r_yes["halo_amount"] > 0                            # FSDP absorbed by halo
+    assert 0.0 < r_yes["crystallinity"] < 0.5                  # mostly amorphous
+    assert r_yes["fractions"]["LiF"] > 0.2                     # crystalline LiF recovered
+
+
 def test_thickness_map_vacuum_referenced_recovers_ramp():
     # left third = vacuum (no scattering), rest = thickness ramp. A per-pixel
     # detector dark offset would fake a thick vacuum; vacuum referencing must

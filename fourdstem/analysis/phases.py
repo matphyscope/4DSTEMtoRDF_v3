@@ -260,41 +260,57 @@ def _groups_by_correlation(labels, G, thr):
     return list(groups.values())
 
 
-def decompose_fractions(q, I, candidates=None, sigma_q=0.035, bg_win_frac=0.10,
-                        q_lo=0.20, q_hi=None, group_corr=0.9):
+def _rolling_min_baseline(y, win):
+    """Lower-envelope baseline: rolling minimum then smoothing.
+
+    Follows a steep amorphous halo / beam tail (dipping under sharp rings) without
+    leaving the positive low-q artifact a symmetric running-mean does on a steep
+    monotonic decay. ``win`` in points.
+    """
+    from scipy.ndimage import minimum_filter1d, uniform_filter1d
+    win = max(3, int(win) | 1)
+    return uniform_filter1d(minimum_filter1d(y, win, mode="nearest"), win, mode="nearest")
+
+
+def decompose_fractions(q, I, candidates=None, sigma_q=0.035, bg_win_frac=0.12,
+                        q_lo=0.20, q_hi=None, group_corr=0.9,
+                        halo_q=None, halo_sigma=0.08):
     """Linear (NNLS) phase-fraction decomposition of a radial diffraction profile.
 
     Thin-sample kinematic superposition: through a column where phases are stacked
     along the beam,
 
-        ``I(q) ~ background(q) + sum_p a_p * R_p(q)``,
+        ``I(q) ~ baseline(q) + h * H(q) + sum_p a_p * R_p(q)``,
 
-    with ``R_p`` the compound ring fingerprint (:func:`phase_ring_profile`) and
-    ``a_p >= 0`` the column amount of phase p. A broad running-mean background
-    (amorphous halo + beam tail) is subtracted; the positive peak residual is then
-    fit by non-negative least squares over the candidate fingerprints. Fractions
-    ``f_p = a_p / sum_p a_p`` give the crystalline composition from ring **shape**,
-    independent of the overall intensity scale (thickness) — so this is the "how
-    much of each phase" that the single-ring virtual-image brightness cannot give.
+    with ``R_p`` the crystalline ring fingerprint (:func:`phase_ring_profile`),
+    ``a_p >= 0`` the column amount of phase p, and ``H(q)`` a broad **amorphous
+    halo** basis (a wide Gaussian at the FSDP ``halo_q``). The halo term is the key
+    to a real (mostly amorphous) SEI: without it NNLS mis-assigns the strong
+    amorphous first-sharp-diffraction-peak to whichever candidate has a low-q ring
+    nearby; with it, the phase fingerprints see only the sharp crystalline rings.
+    A rolling-min lower-envelope baseline removes the smooth beam tail first.
+
+    Fractions ``f_p = a_p / sum_p a_p`` give the **crystalline** composition from
+    ring SHAPE, independent of the overall scale (thickness) — the "how much of
+    each phase" a single-ring virtual image cannot give. ``crystallinity`` =
+    crystalline peak energy / (crystalline + halo) says how much of the ordered
+    signal is crystalline vs amorphous.
 
     **Degeneracy is reported, not hidden.** The normalized Gram matrix
-    ``G_pp' = <R_p, R_p'> / (|R_p||R_p'|)`` measures fingerprint collinearity:
-    LiF/Li2O/Li3N overlap near ~2 A and are not separable at this q-resolution, so
-    their individual split is unreliable. Phases with ``|G| > group_corr`` are also
-    reported as a merged **group** amount (reliable), while the individual
-    ``fractions`` are kept for reference with that caveat.
+    ``G_pp' = <R_p, R_p'>`` flags collinear fingerprints (the ~2 A LiF/Li2O/Li3N
+    overlap); phases with ``|G| > group_corr`` are also merged into a **group**
+    amount. Individual fractions are kept with that caveat.
 
-    Parameters mirror the physics knobs: ``sigma_q`` (ring width / resolution),
-    ``bg_win_frac`` (background smoothing window as a fraction of the profile),
-    ``q_lo``/``q_hi`` (fit window, excluding the beam), ``group_corr`` (grouping).
+    Knobs: ``sigma_q`` (ring width / resolution), ``bg_win_frac`` (baseline window
+    fraction), ``q_lo``/``q_hi`` (fit window, excluding the beam), ``halo_q`` /
+    ``halo_sigma`` (amorphous basis; ``None`` disables it), ``group_corr``.
 
-    Returns a dict with: ``amounts`` (a_p), ``fractions`` (f_p),
-    ``group_amounts``/``group_fractions`` (merged degenerate groups),
-    ``gram`` (ndarray) + ``labels``, ``resid_frac`` (unexplained peak fraction),
-    and ``q_fit``/``peaks``/``fit``/``bg`` arrays for plotting.
+    Returns a dict with: ``amounts``, ``fractions``, ``group_amounts`` /
+    ``group_fractions``, ``halo_amount``, ``crystallinity``, ``gram`` + ``labels``,
+    ``resid_frac`` (unexplained peak fraction), and ``q_fit`` / ``peaks`` / ``fit``
+    / ``halo_fit`` / ``bg`` arrays for plotting.
     """
     from scipy.optimize import nnls
-    from scipy.ndimage import uniform_filter1d
 
     names = list(candidates) if candidates is not None else list(CANDIDATES)
     q = np.asarray(q, float)
@@ -303,20 +319,26 @@ def decompose_fractions(q, I, candidates=None, sigma_q=0.035, bg_win_frac=0.10,
     q, I = q[ok], I[ok]
     if q_hi is None:
         q_hi = float(q.max())
-    win = max(5, int(len(q) * bg_win_frac) | 1)
-    bg = uniform_filter1d(I, win, mode="nearest")
+    bg = _rolling_min_baseline(I, len(q) * bg_win_frac)
     peaks = np.clip(I - bg, 0.0, None)
 
     sel = (q >= q_lo) & (q <= q_hi)
     qf, pf = q[sel], peaks[sel]
-    R = np.column_stack([phase_ring_profile(qf, c, sigma_q) for c in names])
-    # NNLS amounts (>=0); columns carry tabulated relative structure factors
-    a, _ = nnls(R, pf)
-    amounts = {c: float(ai) for c, ai in zip(names, a)}
-    tot = float(a.sum())
-    fractions = {c: (float(ai) / tot if tot > 0 else 0.0) for c, ai in zip(names, a)}
+    cols = [phase_ring_profile(qf, c, sigma_q) for c in names]
+    has_halo = halo_q is not None and q_lo <= halo_q <= q_hi
+    if has_halo:
+        cols.append(np.exp(-0.5 * ((qf - halo_q) / halo_sigma) ** 2))
+    A = np.column_stack(cols)
+    a, _ = nnls(A, pf)
+    a_phase = a[:len(names)]
+    halo_amount = float(a[len(names)]) if has_halo else 0.0
 
-    # normalized Gram (collinearity) over the fit window
+    amounts = {c: float(ai) for c, ai in zip(names, a_phase)}
+    tot = float(a_phase.sum())
+    fractions = {c: (float(ai) / tot if tot > 0 else 0.0) for c, ai in zip(names, a_phase)}
+
+    # normalized Gram (collinearity) of the phase fingerprints over the fit window
+    R = A[:, :len(names)]
     norms = np.sqrt((R ** 2).sum(0))
     norms_safe = np.where(norms > 0, norms, 1.0)
     G = (R.T @ R) / np.outer(norms_safe, norms_safe)
@@ -329,14 +351,19 @@ def decompose_fractions(q, I, candidates=None, sigma_q=0.035, bg_win_frac=0.10,
         group_amounts[key] = s
         group_fractions[key] = (s / tot if tot > 0 else 0.0)
 
-    fit = R @ a
+    fit = A @ a
+    crys = float(np.linalg.norm(R @ a_phase))
+    halo_fit = (A[:, len(names)] * halo_amount) if has_halo else np.zeros_like(qf)
+    halo_energy = float(np.linalg.norm(halo_fit))
+    crystallinity = crys / (crys + halo_energy) if (crys + halo_energy) > 0 else 0.0
     denom = float(np.linalg.norm(pf)) or 1.0
     resid_frac = float(np.linalg.norm(pf - fit) / denom)
 
     return dict(amounts=amounts, fractions=fractions,
                 group_amounts=group_amounts, group_fractions=group_fractions,
+                halo_amount=halo_amount, crystallinity=crystallinity,
                 gram=G, labels=names, resid_frac=resid_frac,
-                q_fit=qf, peaks=pf, fit=fit, bg=bg[sel])
+                q_fit=qf, peaks=pf, fit=fit, halo_fit=halo_fit, bg=bg[sel])
 
 
 def analyze_diffraction(mean_pat, max_pat, q_per_px, center=None,
