@@ -52,6 +52,10 @@ from .phases import (
     measure_ellipticity, diagnose_cube,
     PhaseReport, analyze_phases,
 )
+from .indexing import (
+    index_gvectors, index_pattern, spots_to_gvectors, reflections as phase_reflections,
+    crystallinity_map, label_grains, grain_patterns, index_grains,
+)
 from .unmix import (
     COMPOUND_SHELLS,
     synth_compound_rdf,
@@ -83,6 +87,8 @@ __all__ = [
     "CANDIDATES", "PHASE_DISTANCE", "PhaseEvidence", "DiffractionReport",
     "detect_rings", "detect_spots", "score_phases", "analyze_diffraction",
     "phase_ring_profile", "decompose_fractions",
+    "index_gvectors", "index_pattern", "spots_to_gvectors", "phase_reflections",
+    "crystallinity_map", "label_grains", "grain_patterns", "index_grains",
     "measure_ellipticity", "diagnose_cube",
     "PhaseReport", "analyze_phases",
 ]

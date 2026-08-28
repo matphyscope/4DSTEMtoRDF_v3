@@ -114,6 +114,83 @@ def test_average_pattern_over_scan_mask():
     assert np.allclose(avg, (cube[0, 0] + cube[1, 2]) / 2)
 
 
+def _sim_cubic_zone(phase, hmax=3):
+    # [001]-zone single-crystal g-vectors (l=0) for a cubic candidate
+    from fourdstem.analysis.indexing import _recip_basis, LATTICE, CENTERING_RULE
+    B = _recip_basis(LATTICE[phase]); rule = CENTERING_RULE[LATTICE[phase]["centering"]]
+    gs = []
+    for h in range(-hmax, hmax + 1):
+        for k in range(-hmax, hmax + 1):
+            if (h, k) == (0, 0) or not rule(h, k, 0):
+                continue
+            g = h * B[0] + k * B[1]
+            if np.hypot(g[0], g[1]) <= 1.15:
+                gs.append([g[0], g[1]])
+    return np.asarray(gs, float)
+
+
+def test_index_pattern_confirms_and_rejects_denser_lattice():
+    # a LiF [001] single-crystal pattern must index as LiF, and the near-coincident
+    # denser Li2S lattice (a ~ sqrt(2)*a_LiF) must lose on completeness, not win on
+    # coverage. This is the "confirmed by indexing" tier, not a |q| match.
+    gs = _sim_cubic_zone("LiF")
+    best, results = fds.index_pattern(gs, candidates=["LiF", "Li2O", "Li2S"], min_spots=3)
+    assert best["phase"] == "LiF" and best["indexed"]
+    assert best["completeness"] > 0.9 and abs(best["zone"][2]) > 0    # [00l] zone
+    by = {r["phase"]: r for r in results}
+    assert by["Li2S"]["completeness"] < by["LiF"]["completeness"]     # denser lattice penalized
+
+
+def test_index_pattern_needs_enough_spots():
+    # two spots cannot fix a zone -> no indexing
+    gs = _sim_cubic_zone("LiF")[:2]
+    best, results = fds.index_pattern(gs, candidates=["LiF"], min_spots=3)
+    assert best is None or not best.get("indexed", False)
+
+
+def test_index_grains_end_to_end():
+    # a cube with one crystalline grain (LiF [001] spots) in a corner, amorphous
+    # elsewhere: crystallinity map + grain labels + indexing should recover a grain
+    # and index it as LiF.
+    from fourdstem.analysis.indexing import _recip_basis, LATTICE
+    B = _recip_basis(LATTICE["LiF"])
+    H = W = 96
+    cx, cy = W / 2, H / 2
+    q_per_px = 0.02
+    yy, xx = np.mgrid[0:H, 0:W]
+    rr = np.hypot(xx - cx, yy - cy)
+    beam = 20 * np.exp(-rr ** 2 / (2 * 2.0 ** 2))
+    halo = 3 * np.exp(-(rr - 22) ** 2 / (2 * 4.0 ** 2))
+    # LiF [001] spots as a detector pattern
+    spot_img = np.zeros((H, W))
+    for h in range(-3, 4):
+        for k in range(-3, 4):
+            if (h, k) == (0, 0) or not (h % 2 == k % 2 == 0):
+                continue
+            g = h * B[0] + k * B[1]
+            px, py = cx + g[0] / q_per_px, cy + g[1] / q_per_px
+            if 0 <= px < W and 0 <= py < H:
+                spot_img += 30 * np.exp(-((xx - px) ** 2 + (yy - py) ** 2) / (2 * 1.4 ** 2))
+    Sy, Sx = 12, 12
+    rng = np.random.default_rng(0)
+    cube = np.empty((Sy, Sx, H, W), np.float32)
+    for iy in range(Sy):
+        for ix in range(Sx):
+            base = beam + halo
+            if iy < 4 and ix < 4:                      # crystalline grain corner
+                base = beam + spot_img
+            cube[iy, ix] = np.clip(base + 0.2 * rng.standard_normal((H, W)), 0, None)
+    dc = fds.from_array(cube, q_per_px=q_per_px)
+    grains, labels = fds.index_grains(dc, center=(cx, cy),
+                                      candidates=["LiF", "Li2O", "Li2S"],
+                                      threshold_pctl=85, min_size=3,
+                                      spot_kwargs=dict(n_mad=4.0),
+                                      index_kwargs=dict(min_spots=3))
+    assert labels.max() >= 1                            # found a grain
+    indexed = [g for g in grains if g["best"] and g["best"].get("indexed")]
+    assert any(g["best"]["phase"] == "LiF" for g in indexed)
+
+
 def test_decompose_fractions_recovers_mixture():
     # profile = Li2S + LiF fingerprints on a smooth background; NNLS decomposition
     # must recover those two and zero the rest, and report a symmetric Gram.
