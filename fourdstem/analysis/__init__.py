@@ -5,7 +5,7 @@ from .virtual_image import (
     bright_field,
     annular_dark_field,
     center_of_mass_map,
-    structural_map,
+    structural_map, thickness_map,
     material_mask,
     average_pattern,
     average_pattern_aligned,
@@ -67,7 +67,7 @@ from .unmix import (
 
 __all__ = [
     "azimuthal_integrate", "azimuthal_variance", "radial_profiles",
-    "virtual_image", "bright_field", "annular_dark_field", "center_of_mass_map", "structural_map", "material_mask", "average_pattern", "average_pattern_aligned",
+    "virtual_image", "bright_field", "annular_dark_field", "center_of_mass_map", "structural_map", "thickness_map", "material_mask", "average_pattern", "average_pattern_aligned",
     "find_peaks_1d", "refine_peak_parabolic", "first_peak_position", "peak_centroid", "find_fsdp",
     "fit_gaussian_peak",
     "DecompositionResult", "ProfileDecomposition", "nmf_decompose", "pca_decompose",

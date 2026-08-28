@@ -185,6 +185,34 @@ def structural_map(cube, center=None, r_inner=None, r_outer=None,
     return np.asarray(ring) / total
 
 
+def thickness_map(cube, center=None, beam_radius=None):
+    """Relative thickness ``t/lambda = ln(I_total / I_transmitted)`` per position.
+
+    As a sample thickens, more electrons scatter out of the direct beam, so the
+    transmitted (central-disk) fraction decays ~ ``exp(-t/lambda)``; the log-ratio
+    of the whole-pattern intensity to the direct-beam intensity therefore rises
+    roughly linearly with thickness in mean-free-paths. It is a RATIO, so it is
+    independent of dose/beam current and comparable across scans. Absolute
+    thickness needs ``lambda`` (material + kV); for telling thick from thin
+    regions — e.g. a thin SEI shell vs a thick core — the relative map is what
+    matters. ``beam_radius`` (px) is the direct-beam disk; default ~ det/20.
+
+    Returns a map over the scan grid (higher = thicker).
+    """
+    center = _resolve_center(cube, center)
+    dp = cube.dp_shape
+    if beam_radius is None:
+        beam_radius = max(3.0, min(dp) / 20.0)
+    flat = cube._flat_patterns()
+    total = np.asarray(flat, float).reshape(flat.shape[0], -1).sum(1)
+    beam = np.asarray(cube.get_virtual_image(disk_mask(dp, center, beam_radius)),
+                      float).ravel()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = np.log(np.clip(total, 1.0, None) / np.clip(beam, 1.0, None))
+    scan = cube.scan_shape
+    return t.reshape(scan) if scan else t
+
+
 def center_of_mass_map(cube, center=None, mask=None, normalize=True):
     """Per-scan-position center-of-mass of the diffraction pattern (DPC).
 
