@@ -314,6 +314,28 @@ def test_structural_halo_beam_guard_low_q_fsdp():
     assert np.mean(sig[mat & ~has] > 3) < 0.1
 
 
+def test_amorphous_halo_peaks_width_filter_rejects_sharp_ring():
+    # A broad halo at q=0.22 and a SHARP crystalline ring at q=0.33 both make a
+    # maximum in the profile. Without width filtering both are returned; with
+    # min_width_q the sharp ring is dropped (halos are broad) and only the halo
+    # survives, so the ring stays available to the ring stage. Also: no peak is
+    # pinned to the q_lo boundary (beam-edge artifact).
+    from fourdstem.analysis.detectors import amorphous_halo_peaks
+    q = np.linspace(0.0, 1.15, 230)
+    def bg(s):
+        return s * (0.03 / np.clip(q, 0.01, None)) ** 2.4 + 0.02 * s
+    def gg(a, q0, w):
+        return a * np.exp(-0.5 * ((q - q0) / w) ** 2)
+    prof = bg(280) + gg(9.0, 0.22, 0.05) + gg(6.0, 0.33, 0.012)
+    both = amorphous_halo_peaks(q, prof, q_lo=0.18, q_hi=1.0, smooth=3, min_width_q=0.0)
+    broad = amorphous_halo_peaks(q, prof, q_lo=0.18, q_hi=1.0, smooth=3, min_width_q=0.045)
+    assert any(abs(p - 0.22) < 0.03 for p in both)
+    assert any(abs(p - 0.33) < 0.03 for p in both)      # ring seen without filter
+    assert any(abs(p - 0.22) < 0.03 for p in broad)     # halo kept
+    assert not any(abs(p - 0.33) < 0.03 for p in broad)  # sharp ring rejected
+    assert not any(p <= 0.18 + 0.03 for p in broad)      # no boundary artifact
+
+
 def test_halo_bump_contrast_is_thickness_independent():
     # halo_bump_maps.contrast (bump / local background) must flag a real halo and
     # reject thick-but-featureless material, where the raw bump alone (scaling with

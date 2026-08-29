@@ -294,23 +294,45 @@ def ring_phase_evidence(cube, center, q_per_px, candidates=None, ref_mask=None,
 
 
 def amorphous_halo_peaks(q, I, q_lo=0.15, q_hi=1.1, smooth=9, prominence_frac=0.02,
-                         max_peaks=5):
+                         max_peaks=5, edge=0.03, min_width_q=0.0):
     """Broad amorphous maxima (FSDP + secondary halos) in a radial profile.
 
     Rolling-min baseline subtraction then peak picking on the smoothed residual —
     the diffuse halo bumps (e.g. ~0.2, 0.3, 0.4, 0.8 1/A) whose radii seed the
     halo detectors. Returns a list of ``q`` positions (1/A), strongest first.
+
+    Peaks within ``edge`` of ``q_lo``/``q_hi`` are dropped: the rolling-min
+    baseline cannot fully remove the steep beam tail right at the low boundary,
+    so a spurious maximum otherwise appears pinned to ``q_lo`` (a beam-edge
+    artifact, not a halo). ``find_peaks`` runs on the residual itself (not
+    ``res * mask``, which would manufacture a step at the boundary).
+
+    ``min_width_q`` > 0 keeps only peaks whose half-prominence width (in 1/A)
+    exceeds it — an **amorphous halo is broad**, so this rejects a *sharp*
+    crystalline ring that also produces a maximum in the (patch-averaged) mean
+    profile. Use a small internal ``smooth`` when width-filtering so a sharp ring
+    is not artificially broadened into the halo range.
     """
     from scipy.ndimage import minimum_filter1d, uniform_filter1d
-    from scipy.signal import find_peaks
+    from scipy.signal import find_peaks, peak_widths
     q = np.asarray(q, float)
     I = np.asarray(I, float)
     w = max(5, int(len(q) * 0.12) | 1)
     base = uniform_filter1d(minimum_filter1d(I, w), w)
-    res = uniform_filter1d(np.clip(I - base, 0, None), max(3, smooth))
-    m = (q >= q_lo) & (q <= q_hi)
-    if not m.any() or res[m].max() <= 0:
+    res = uniform_filter1d(np.clip(I - base, 0, None), max(1, smooth))
+    inwin = (q >= q_lo) & (q <= q_hi)
+    if not inwin.any() or res[inwin].max() <= 0:
         return []
-    pk, props = find_peaks(res * m, prominence=prominence_frac * res[m].max())
+    keep = (q >= q_lo + edge) & (q <= q_hi - edge)
+    pk, _ = find_peaks(res, prominence=prominence_frac * res[inwin].max())
+    pk = pk[keep[pk]]
+    if pk.size == 0:
+        return []
+    if min_width_q > 0:
+        dqb = float(np.median(np.diff(q)))
+        wq = peak_widths(res, pk, rel_height=0.5)[0] * dqb
+        pk = pk[wq >= min_width_q]
+        if pk.size == 0:
+            return []
     order = np.argsort(-res[pk])
     return [float(q[i]) for i in pk[order][:max_peaks]]
