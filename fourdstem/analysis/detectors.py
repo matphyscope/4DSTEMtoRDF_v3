@@ -294,45 +294,56 @@ def ring_phase_evidence(cube, center, q_per_px, candidates=None, ref_mask=None,
 
 
 def amorphous_halo_peaks(q, I, q_lo=0.15, q_hi=1.1, smooth=9, prominence_frac=0.02,
-                         max_peaks=5, edge=0.03, min_width_q=0.0):
+                         max_peaks=5, edge=0.03, min_width_q=0.0, deg=None,
+                         return_profile=False):
     """Broad amorphous maxima (FSDP + secondary halos) in a radial profile.
 
-    Rolling-min baseline subtraction then peak picking on the smoothed residual —
-    the diffuse halo bumps (e.g. ~0.2, 0.3, 0.4, 0.8 1/A) whose radii seed the
-    halo detectors. Returns a list of ``q`` positions (1/A), strongest first.
+    Two background models, chosen by ``deg``:
 
-    Peaks within ``edge`` of ``q_lo``/``q_hi`` are dropped: the rolling-min
-    baseline cannot fully remove the steep beam tail right at the low boundary,
-    so a spurious maximum otherwise appears pinned to ``q_lo`` (a beam-edge
-    artifact, not a halo). ``find_peaks`` runs on the residual itself (not
-    ``res * mask``, which would manufacture a step at the boundary).
+    * ``deg=None`` — **rolling-min** baseline, peaks on the smoothed residual.
+    * ``deg`` an int — **convex power-law** background (degree-``deg`` log-log
+      polynomial) subtracted, peaks on the **contrast** (residual / background).
+      This is the one to use on a steep beam tail: it turns a *secondary halo
+      that is only a shoulder* (no local maximum in the raw profile, so invisible
+      to plain peak finding) into a real bump, and — being a contrast — it does
+      not let the ~100x taller FSDP swamp a weak high-q halo the way an absolute
+      residual does. This is why only the FSDP is found otherwise.
 
-    ``min_width_q`` > 0 keeps only peaks whose half-prominence width (in 1/A)
-    exceeds it — an **amorphous halo is broad**, so this rejects a *sharp*
-    crystalline ring that also produces a maximum in the (patch-averaged) mean
-    profile. Use a small internal ``smooth`` when width-filtering so a sharp ring
-    is not artificially broadened into the halo range.
+    Peaks within ``edge`` of ``q_lo``/``q_hi`` are dropped (the background cannot
+    fully model the steep beam tail at the low boundary, which would otherwise
+    pin a spurious peak to ``q_lo``). ``min_width_q`` > 0 keeps only peaks whose
+    half-prominence width (1/A) exceeds it — an amorphous halo is **broad**, so
+    this rejects a sharp crystalline ring that also peaks in the mean profile.
+
+    Returns ``q`` positions (1/A), strongest first. With ``return_profile`` also
+    returns ``(q, detect_signal)`` — the residual/contrast that was peak-picked,
+    for plotting what was (and was not) detected.
     """
     from scipy.ndimage import minimum_filter1d, uniform_filter1d
     from scipy.signal import find_peaks, peak_widths
     q = np.asarray(q, float)
     I = np.asarray(I, float)
-    w = max(5, int(len(q) * 0.12) | 1)
-    base = uniform_filter1d(minimum_filter1d(I, w), w)
-    res = uniform_filter1d(np.clip(I - base, 0, None), max(1, smooth))
+    if deg is None:
+        w = max(5, int(len(q) * 0.12) | 1)
+        base = uniform_filter1d(minimum_filter1d(I, w), w)
+        sig = uniform_filter1d(np.clip(I - base, 0, None), max(1, smooth))
+    else:
+        fitm = (q >= q_lo - edge) & (q <= q_hi)
+        lq = np.log(np.clip(q, 1e-6, None))
+        coef = np.polyfit(lq[fitm], np.log(np.clip(I[fitm], 1e-3, None)), deg)
+        cbg = np.exp(np.clip(np.polyval(coef, lq), -60, 60))
+        sig = uniform_filter1d(np.clip(I - cbg, 0, None) / np.clip(cbg, 1e-6, None),
+                               max(1, smooth))
     inwin = (q >= q_lo) & (q <= q_hi)
-    if not inwin.any() or res[inwin].max() <= 0:
-        return []
+    if not inwin.any() or sig[inwin].max() <= 0:
+        return ([], (q, sig)) if return_profile else []
     keep = (q >= q_lo + edge) & (q <= q_hi - edge)
-    pk, _ = find_peaks(res, prominence=prominence_frac * res[inwin].max())
+    pk, _ = find_peaks(sig, prominence=prominence_frac * sig[inwin].max())
     pk = pk[keep[pk]]
-    if pk.size == 0:
-        return []
-    if min_width_q > 0:
+    if min_width_q > 0 and pk.size:
         dqb = float(np.median(np.diff(q)))
-        wq = peak_widths(res, pk, rel_height=0.5)[0] * dqb
+        wq = peak_widths(sig, pk, rel_height=0.5)[0] * dqb
         pk = pk[wq >= min_width_q]
-        if pk.size == 0:
-            return []
-    order = np.argsort(-res[pk])
-    return [float(q[i]) for i in pk[order][:max_peaks]]
+    order = np.argsort(-sig[pk]) if pk.size else np.array([], int)
+    peaks = [float(q[i]) for i in pk[order][:max_peaks]]
+    return (peaks, (q, sig)) if return_profile else peaks
