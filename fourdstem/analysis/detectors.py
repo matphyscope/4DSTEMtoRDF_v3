@@ -41,19 +41,27 @@ def strict_vacuum_mask(cube, center=None, q_per_px=None, pctl=15.0):
 
 
 def peak_above_flank(q, prof, q0, dq, flank=2.0):
-    """Annular peak height at ``q0`` above the local background, per position.
+    """Annular signal at ``q0``, per position. ``prof`` is ``(Npix, nbin)``.
 
-    Mean intensity in the detector band ``[q0-dq, q0+dq]`` minus the mean over the
-    two flanking bands (``dq..flank*dq`` on each side). A real halo/ring peak gives
-    a positive value; a smooth (thickness) background subtracts to ~0, so this is
-    thickness-insensitive and isolates *structure*. ``prof`` is ``(Npix, nbin)``.
+    Mean intensity in the detector band ``[q0-dq, q0+dq]``, optionally minus the
+    mean over the two flanking bands (``dq..flank*dq`` on each side):
+
+    * ``flank`` a number > 1 (default): **peak above local background** — a smooth
+      (thickness) background subtracts to ~0, isolating a **sharp** feature (a
+      polycrystalline ring). This is the RING detector.
+    * ``flank`` ``None`` (or <= 1): **plain annular mean** — no flank subtraction,
+      so a **broad** feature (an amorphous halo) is not cancelled by its own tails.
+      This is the HALO detector; the vacuum reference (not the flanks) supplies the
+      background there.
     """
     band = (q >= q0 - dq) & (q <= q0 + dq)
-    lo = (q >= q0 - flank * dq) & (q < q0 - dq)
-    hi = (q > q0 + dq) & (q <= q0 + flank * dq)
     if band.sum() == 0:
         return np.zeros(prof.shape[0])
     center = prof[:, band].mean(1)
+    if flank is None or flank <= 1:
+        return center
+    lo = (q >= q0 - flank * dq) & (q < q0 - dq)
+    hi = (q > q0 + dq) & (q <= q0 + flank * dq)
     flanks = []
     if lo.any():
         flanks.append(prof[:, lo].mean(1))
