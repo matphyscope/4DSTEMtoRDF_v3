@@ -167,7 +167,7 @@ def halo_bump_maps(cube, center, q_per_px, halo_qs, dq=0.05, beam_cut=0.15,
 
 def fit_halo_gaussians(q, bump, q_lo=0.18, q_hi=1.05, seeds=None, max_comp=6,
                        prominence_frac=0.04, min_width_q=0.02, max_width_q=0.14,
-                       smooth=3):
+                       smooth=3, min_amp_frac=0.02):
     """Decompose a background-subtracted halo ``bump`` into overlapping Gaussians.
 
     A broad amorphous bump is often several overlapping halos (e.g. a FSDP with a
@@ -219,7 +219,7 @@ def fit_halo_gaussians(q, bump, q_lo=0.18, q_hi=1.05, seeds=None, max_comp=6,
                  for i in range(len(popt) // 3)]
     except Exception:
         comps = [(float(c), float(b[np.argmin(np.abs(q - c))]), 0.04) for c in cen]
-    comps = [c for c in comps if c[1] > 0.02 * amax]        # drop vanished components
+    comps = [c for c in comps if c[1] > min_amp_frac * amax]  # drop vanished (min_amp_frac=0 keeps all)
     comps.sort(key=lambda t: t[0])
     return [(c, 1.0 / c if c > 0 else np.inf, a, w) for c, a, w in comps]
 
