@@ -165,6 +165,65 @@ def halo_bump_maps(cube, center, q_per_px, halo_qs, dq=0.05, beam_cut=0.15,
     return out
 
 
+def fit_halo_gaussians(q, bump, q_lo=0.18, q_hi=1.05, seeds=None, max_comp=6,
+                       prominence_frac=0.04, min_width_q=0.02, max_width_q=0.14,
+                       smooth=3):
+    """Decompose a background-subtracted halo ``bump`` into overlapping Gaussians.
+
+    A broad amorphous bump is often several overlapping halos (e.g. a FSDP with a
+    shoulder, or a wide high-q hump that is really two components). Plain peak
+    finding gives one maximum per bump; a **multi-Gaussian fit** resolves the
+    sub-peaks. Seeds come from ``seeds`` (a list of q you read off the bump plot)
+    if given, else from peaks of the lightly smoothed bump above
+    ``prominence_frac`` of its max, inside ``[q_lo, q_hi]``. Each seed becomes one
+    Gaussian; the sum is least-squares fit (centres bounded near their seed,
+    widths in ``[min_width_q, max_width_q]``, amplitudes >= 0).
+
+    Returns ``[(q, d, amplitude, width), ...]`` sorted by q — the resolved halo
+    components. Falls back to the seed positions if the fit does not converge.
+    """
+    from scipy.signal import find_peaks
+    from scipy.optimize import curve_fit
+    from scipy.ndimage import uniform_filter1d
+    q = np.asarray(q, float)
+    b = uniform_filter1d(np.clip(np.asarray(bump, float), 0, None), max(1, smooth))
+    win = (q >= q_lo) & (q <= q_hi)
+    if not win.any() or b[win].max() <= 0:
+        return []
+    if seeds is not None:
+        cen = np.array(sorted(float(s) for s in seeds if q_lo <= s <= q_hi))
+    else:
+        pk, _ = find_peaks(np.where(win, b, 0.0), prominence=prominence_frac * b[win].max())
+        cen = q[pk] if pk.size else np.array([q[np.argmax(np.where(win, b, 0.0))]])
+    cen = cen[:max_comp]
+    if cen.size == 0:
+        return []
+
+    def multi(x, *p):
+        y = np.zeros_like(x)
+        for i in range(len(p) // 3):
+            a, c, w = p[3 * i:3 * i + 3]
+            y = y + a * np.exp(-0.5 * ((x - c) / w) ** 2)
+        return y
+
+    amax = float(b[win].max()) * 2.0
+    p0, lo, hi = [], [], []
+    for c in cen:
+        a0 = float(b[np.argmin(np.abs(q - c))])
+        p0 += [max(a0, 1e-6), c, 0.04]
+        lo += [0.0, c - 0.035, min_width_q]
+        hi += [amax, c + 0.035, max_width_q]
+    try:
+        popt, _ = curve_fit(multi, q[win], b[win], p0=p0, bounds=(lo, hi), maxfev=20000)
+        comps = [(float(popt[3 * i + 1]), float(popt[3 * i]), float(popt[3 * i + 2]))
+                 for i in range(len(popt) // 3)]
+    except Exception:
+        comps = [(float(c), float(b[np.argmin(np.abs(q - c))]), 0.04) for c in cen]
+    comps = [c for c in comps if c[1] > 0.02 * amax]        # drop vanished components
+    comps.sort(key=lambda t: t[0])
+    return [(c, 1.0 / c if c > 0 else np.inf, a, w) for c, a, w in comps]
+
+
 def halo_background_1d(q, prof1d, halo_qs, dq=0.05, beam_cut=0.15, q_max=1.1, deg=2):
     """Smooth convex background of a single radial profile — the same log-log
     power-law fit :func:`halo_bump_maps` uses per pixel, but for one 1D profile
