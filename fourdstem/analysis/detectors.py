@@ -104,6 +104,49 @@ def detector_map(cube, center, q_per_px, q0, dq=0.03, flank=2.0, vacuum_mask=Non
     return significance(raw2d, vacuum_mask), raw2d
 
 
+def structural_halo_map(cube, center, q_per_px, halo_q, dq=0.06, flank_gap=0.12,
+                        flank_w=0.05, vacuum_mask=None, q_max=1.2, nbin=200,
+                        n_jobs=1, _stack=None):
+    """Structural amorphous-halo map: the FSDP **bump above the smooth background**.
+
+    A plain annular detector rises with total scattering (thickness), and even a
+    steep but *featureless* background has intensity at the halo radius — so
+    neither tells a genuine amorphous halo from mere thickness/background. Here a
+    **straight line is fit to the two flank windows** (outside the halo, at
+    ``halo_q ± flank_gap`` with width ``flank_w``) and evaluated under the band
+    ``[halo_q - dq, halo_q + dq]``: the halo *bump above that local sloped trend*.
+    A smooth (even steep) background lies on the line → residual ~0; only a real
+    peak rises above it. Vacuum-referenced (:func:`significance`).
+
+    Returns ``(sig, raw)`` over the scan grid.
+    """
+    scan = cube.scan_shape
+    if _stack is None:
+        q, prof = radial_stack(cube, center, q_per_px, q_max=q_max, nbin=nbin, n_jobs=n_jobs)
+    else:
+        q, prof = _stack
+    band = (q >= halo_q - dq) & (q <= halo_q + dq)
+    fl = ((q >= halo_q - flank_gap - flank_w) & (q <= halo_q - flank_gap)) | \
+         ((q >= halo_q + flank_gap) & (q <= halo_q + flank_gap + flank_w))
+    if band.sum() == 0 or fl.sum() < 2:
+        raw = np.zeros(prof.shape[0])
+    else:
+        qf = q[fl]
+        # per-pixel linear fit over the flank points: slope, intercept
+        qfm = qf.mean()
+        dq_ = qf - qfm
+        denom = float((dq_ ** 2).sum()) or 1.0
+        slope = (prof[:, fl] * dq_).sum(1) / denom
+        intercept = prof[:, fl].mean(1) - slope * qfm
+        qc = q[band]
+        base_center = slope[:, None] * qc[None, :] + intercept[:, None]   # (Npix, nband)
+        raw = np.clip(prof[:, band] - base_center, 0.0, None).mean(1)
+    raw = raw.reshape(scan)
+    if vacuum_mask is None:
+        vacuum_mask = strict_vacuum_mask(cube, center=center, q_per_px=q_per_px)
+    return significance(raw, vacuum_mask), raw
+
+
 def ring_phase_evidence(cube, center, q_per_px, candidates=None, ref_mask=None,
                         dq=0.03, flank=2.0, ring_sigma=4.0, q_lo=0.25, q_max=1.15,
                         nbin=200, n_jobs=1, _stack=None):

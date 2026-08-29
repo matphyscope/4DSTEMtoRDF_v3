@@ -230,6 +230,47 @@ def test_vacuum_referenced_halo_detector():
     assert (sig[~truth] > 3).mean() < 0.1                    # vacuum below cutoff
 
 
+def test_structural_halo_rejects_smooth_background():
+    # three regions: a real amorphous halo BUMP, a smooth (featureless) background
+    # with intensity at the halo radius, and vacuum. A plain annular detector is
+    # fooled by the smooth background; the structural halo map (bump above a
+    # linear flank baseline) must flag only the real bump.
+    from fourdstem.analysis.detectors import structural_halo_map, detector_map, strict_vacuum_mask
+    from fourdstem.analysis.classify import radial_stack
+    H = W = 100
+    cx, cy = W / 2, H / 2
+    q_per_px = 0.02
+    yy, xx = np.mgrid[0:H, 0:W]
+    rr = np.hypot(xx - cx, yy - cy)
+    beam = 30 * np.exp(-rr ** 2 / (2 * 2.5 ** 2))
+    halo = np.exp(-(rr - 13) ** 2 / (2 * 6.0 ** 2))
+    smooth = 1.0 / (1.0 + (rr / 8.0) ** 2)
+    Sy, Sx = 24, 24
+    rng = np.random.default_rng(0)
+    cube = np.empty((Sy, Sx, H, W), np.float32)
+    lab = np.zeros((Sy, Sx), int)
+    for iy in range(Sy):
+        for ix in range(Sx):
+            if iy < 8:
+                base = beam + 3 * halo; lab[iy, ix] = 1
+            elif iy < 16:
+                base = beam + 20 * smooth; lab[iy, ix] = 2
+            else:
+                base = 0.9 * beam; lab[iy, ix] = 0
+            cube[iy, ix] = np.clip(base + 0.1 * np.sqrt(np.clip(base, 0, None)) *
+                                   rng.standard_normal((H, W)), 0, None)
+    dc = fds.from_array(cube, q_per_px=q_per_px)
+    vac = strict_vacuum_mask(dc, center=(cx, cy), pctl=15)
+    q, prof = radial_stack(dc, (cx, cy), q_per_px, q_max=1.2, nbin=200)
+    plain, _ = detector_map(dc, (cx, cy), q_per_px, 0.26, dq=0.06, flank=None,
+                            vacuum_mask=vac, _stack=(q, prof))
+    struct, _ = structural_halo_map(dc, (cx, cy), q_per_px, 0.26, dq=0.06,
+                                    flank_gap=0.10, flank_w=0.05, vacuum_mask=vac, _stack=(q, prof))
+    assert plain[lab == 2].mean() > plain[lab == 1].mean() * 0.5   # plain fooled by smooth bg
+    assert struct[lab == 1].mean() > 3                             # real halo bump flagged
+    assert struct[lab == 2].mean() < 3                             # smooth bg rejected
+
+
 def test_ring_phase_evidence_finds_rings_not_amorphous():
     # a polycrystalline LiF ring patch in an otherwise amorphous film. Referenced
     # to the amorphous background, LiF ring evidence must be high in the patch and
