@@ -230,6 +230,49 @@ def test_vacuum_referenced_halo_detector():
     assert (sig[~truth] > 3).mean() < 0.1                    # vacuum below cutoff
 
 
+def test_ring_phase_evidence_finds_rings_not_amorphous():
+    # a polycrystalline LiF ring patch in an otherwise amorphous film. Referenced
+    # to the amorphous background, LiF ring evidence must be high in the patch and
+    # ~0 in the amorphous region (no false ring detection on the broad halo), and
+    # LiF must beat Li2O/Li2S (which only share a couple of rings).
+    H = W = 120
+    cx, cy = W / 2, H / 2
+    q_per_px = 0.02
+    yy, xx = np.mgrid[0:H, 0:W]
+    rr = np.hypot(xx - cx, yy - cy)
+    beam = 30 * np.exp(-rr ** 2 / (2 * 2.5 ** 2))
+    broadhalo = np.exp(-(rr - 15) ** 2 / (2 * 12.0 ** 2))
+    lif = np.zeros((H, W))
+    for d, w in fds.COMPOUND_RINGS["LiF"]:
+        r = (1.0 / d) / q_per_px
+        if r < min(cx, cy):
+            lif += 8 * w * np.exp(-(rr - r) ** 2 / (2 * 1.5 ** 2))
+    Sy, Sx = 24, 24
+    rng = np.random.default_rng(0)
+    cube = np.empty((Sy, Sx, H, W), np.float32)
+    mat = np.zeros((Sy, Sx), bool)
+    for iy in range(Sy):
+        for ix in range(Sx):
+            base = beam + 1.5 * broadhalo
+            mat[iy, ix] = iy < Sy - 4
+            if not mat[iy, ix]:
+                base = 0.9 * beam
+            if 6 <= iy < 11 and 6 <= ix < 16:
+                base = base + lif
+            cube[iy, ix] = np.clip(base + 0.1 * np.sqrt(np.clip(base, 0, None)) *
+                                   rng.standard_normal((H, W)), 0, None)
+    dc = fds.from_array(cube, q_per_px=q_per_px)
+    ev = fds.ring_phase_evidence(dc, center=(cx, cy), q_per_px=q_per_px,
+                                 candidates=["LiF", "Li2O", "Li2S"], ref_mask=mat,
+                                 ring_sigma=4.0)
+    patch = np.zeros((Sy, Sx), bool); patch[6:11, 6:16] = True
+    amorph = mat & ~patch
+    assert ev["LiF"]["evidence"][patch].mean() > 0.6           # LiF rings present in patch
+    assert ev["LiF"]["evidence"][amorph].mean() < 0.1          # not in amorphous
+    assert ev["LiF"]["evidence"][patch].mean() > ev["Li2O"]["evidence"][patch].mean()
+    assert ev["LiF"]["evidence"][patch].mean() > ev["Li2S"]["evidence"][patch].mean()
+
+
 def test_classify_pixels_tiers_and_examples():
     # per-pixel classification: a crystalline LiF corner should reach predicted/
     # confirmed LiF, amorphous material should be 'weak', vacuum 'none', and one

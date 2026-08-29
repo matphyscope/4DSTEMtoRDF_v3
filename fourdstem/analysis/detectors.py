@@ -104,6 +104,60 @@ def detector_map(cube, center, q_per_px, q0, dq=0.03, flank=2.0, vacuum_mask=Non
     return significance(raw2d, vacuum_mask), raw2d
 
 
+def ring_phase_evidence(cube, center, q_per_px, candidates=None, ref_mask=None,
+                        dq=0.03, flank=2.0, ring_sigma=4.0, q_lo=0.25, q_max=1.15,
+                        nbin=200, n_jobs=1, _stack=None):
+    """Per-phase polycrystalline-ring evidence, per scan pixel.
+
+    For each candidate, a **flank-subtracted** ring detector is placed at every
+    one of its crystalline ring d-spacings — a *sharp* polycrystalline ring shows
+    above the broad amorphous halo, which (being broad) subtracts to ~0.
+
+    The key reference for rings is the **amorphous material background**, not the
+    vacuum: even amorphous material differs enormously from the near-silent vacuum,
+    so a vacuum-referenced ring detector fires everywhere material sits. Instead
+    each ring's flank-subtracted height is z-scored against its distribution over
+    ``ref_mask`` (pass the material mask): the amorphous majority sets the median,
+    and only a genuine sharp ring rises ``ring_sigma`` above it. A ring "counts"
+    where it clears that; the phase's **evidence** is the strength-weighted fraction
+    of its rings that count — several of a phase's rings lighting up together is
+    what a single shared ring cannot fake. Only rings in ``[q_lo, q_max]`` are used.
+
+    Returns ``{phase: dict(evidence, n_sig, rings)}`` — ``evidence`` and ``n_sig``
+    are scan maps, ``rings`` is a list of ``(d, sig_map)``.
+    """
+    from .phases import COMPOUND_RINGS
+    from .virtual_image import _resolve_center
+    center = _resolve_center(cube, center)
+    if q_per_px is None:
+        q_per_px = cube.calibration.q_per_px
+    names = list(candidates) if candidates is not None else list(COMPOUND_RINGS.keys())
+    scan = cube.scan_shape
+    if _stack is None:
+        q, prof = radial_stack(cube, center, q_per_px, q_max=q_max + 0.05, nbin=nbin, n_jobs=n_jobs)
+    else:
+        q, prof = _stack
+    if ref_mask is None:                                    # fall back: everything but strict vacuum
+        ref_mask = ~strict_vacuum_mask(cube, center=center, q_per_px=q_per_px)
+    ref_mask = np.asarray(ref_mask, bool)
+    out = {}
+    for c in names:
+        rings = [(d, w) for d, w in COMPOUND_RINGS[c] if q_lo <= 1.0 / d <= q_max]
+        wsum = sum(w for _, w in rings) + 1e-12
+        evid = np.zeros(scan)
+        nsig = np.zeros(scan, int)
+        ring_sigs = []
+        for d, w in rings:
+            raw = peak_above_flank(q, prof, 1.0 / d, dq, flank=flank).reshape(scan)
+            sig = significance(raw, ref_mask)               # z-score vs amorphous background
+            hit = (sig > ring_sigma) & ref_mask
+            evid += w * hit
+            nsig += hit.astype(int)
+            ring_sigs.append((d, sig))
+        out[c] = dict(evidence=evid / wsum, n_sig=nsig, rings=ring_sigs)
+    return out
+
+
 def amorphous_halo_peaks(q, I, q_lo=0.15, q_hi=1.1, smooth=9, prominence_frac=0.02,
                          max_peaks=5):
     """Broad amorphous maxima (FSDP + secondary halos) in a radial profile.
