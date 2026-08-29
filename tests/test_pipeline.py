@@ -314,6 +314,50 @@ def test_structural_halo_beam_guard_low_q_fsdp():
     assert np.mean(sig[mat & ~has] > 3) < 0.1
 
 
+def test_halo_bump_contrast_is_thickness_independent():
+    # halo_bump_maps.contrast (bump / local background) must flag a real halo and
+    # reject thick-but-featureless material, where the raw bump alone (scaling with
+    # thickness) cannot. Convex power-law tail + localized FSDP in half the material;
+    # the other half is thicker with no halo; vacuum near-silent.
+    from fourdstem.analysis.detectors import halo_bump_maps
+    rng = np.random.default_rng(2)
+    Ny, Nx, det = 16, 16, 150
+    cy = cx = det / 2
+    yy, xx = np.mgrid[0:det, 0:det]
+    r = np.hypot(yy - cy, xx - cx)
+    qpp = 0.0043888
+    q = r * qpp
+
+    def bg(s):
+        return s * (0.03 / np.clip(q, 0.02, None)) ** 2.4 + 0.02 * s
+
+    def halo(a, q0=0.25, w=0.05):
+        return a * np.exp(-0.5 * ((q - q0) / w) ** 2)
+
+    cube = np.zeros((Ny, Nx, det, det), np.float32)
+    has = np.zeros((Ny, Nx), bool)
+    for iy in range(Ny):
+        for ix in range(Nx):
+            if iy < 3:
+                base = bg(300) * 0.02
+            elif ix < 8:
+                base = bg(300) + halo(9.0); has[iy, ix] = True
+            else:
+                base = bg(360)                       # thicker, NO halo
+            cube[iy, ix] = rng.poisson(np.clip(base, 0, None))
+    dc = fds.from_array(cube, q_per_px=qpp)
+    vac = np.zeros((Ny, Nx), bool); vac[:3] = True
+    mat = ~vac
+    out = halo_bump_maps(dc, (cx, cy), qpp, [0.25], dq=0.06, beam_cut=0.14,
+                         q_max=1.0, deg=2, vacuum_mask=vac)
+    csig = out[0.25]["csig"]
+    # contrast is higher for the real halo than for thick-flat material...
+    assert out[0.25]["contrast"][has].mean() > 1.8 * out[0.25]["contrast"][mat & ~has].mean()
+    # ...and at >4 sigma the halo fires while thick-flat does not
+    assert np.mean(csig[has] > 4) > 0.8
+    assert np.mean(csig[mat & ~has] > 4) < 0.2
+
+
 def test_ring_phase_evidence_finds_rings_not_amorphous():
     # a polycrystalline LiF ring patch in an otherwise amorphous film. Referenced
     # to the amorphous background, LiF ring evidence must be high in the patch and

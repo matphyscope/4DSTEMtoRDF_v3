@@ -118,9 +118,15 @@ def halo_bump_maps(cube, center, q_per_px, halo_qs, dq=0.05, beam_cut=0.15,
     into the beam; unlike material-minus-vacuum it removes the material's OWN
     background, not just the vacuum's.
 
-    ``halo_qs`` is the list of halo radii (1/A). Returns
-    ``{q: dict(sig, raw)}`` — vacuum-referenced significance and raw bump height
-    maps over the scan grid — plus the fitted background is implicit.
+    ``halo_qs`` is the list of halo radii (1/A). Returns ``{q: dict(sig, raw,
+    contrast, csig, bg)}`` — ``raw`` the bump height and ``sig`` its
+    vacuum-referenced significance (both scale with thickness); ``contrast`` =
+    bump / local-background (the **thickness-independent** structural indicator:
+    a thick but featureless pixel has a big raw bump only from fit wiggle, but a
+    small contrast), and ``csig`` its vacuum-referenced significance — **use
+    ``csig`` for the structural-halo map** (a real halo clears vacuum by several
+    sigma while thick-flat material does not). ``bg`` is the fitted background
+    level in the band.
     """
     scan = cube.scan_shape
     if _stack is None:
@@ -146,10 +152,35 @@ def halo_bump_maps(cube, center, q_per_px, halo_qs, dq=0.05, beam_cut=0.15,
     out = {}
     for h in halo_qs:
         band = (q >= h - dq) & (q <= h + dq)
-        raw = (np.clip(resid[:, band], 0, None).mean(1) if band.any()
-               else np.zeros(prof.shape[0])).reshape(scan)
-        out[h] = dict(sig=significance(raw, vacuum_mask), raw=raw)
+        if band.any():
+            raw = np.clip(resid[:, band], 0, None).mean(1)
+            bglev = np.clip(bgfit[:, band].mean(1), 1e-6, None)
+            contrast = raw / bglev
+        else:
+            raw = np.zeros(prof.shape[0]); bglev = np.ones(prof.shape[0]); contrast = raw.copy()
+        raw = raw.reshape(scan); contrast = contrast.reshape(scan); bglev = bglev.reshape(scan)
+        out[h] = dict(sig=significance(raw, vacuum_mask), raw=raw,
+                      contrast=contrast, csig=significance(contrast, vacuum_mask),
+                      bg=bglev)
     return out
+
+
+def halo_background_1d(q, prof1d, halo_qs, dq=0.05, beam_cut=0.15, q_max=1.1, deg=2):
+    """Smooth convex background of a single radial profile — the same log-log
+    power-law fit :func:`halo_bump_maps` uses per pixel, but for one 1D profile
+    (e.g. the material-mean) so the demo picture matches the map. Fit over
+    ``[beam_cut, q_max]`` minus a ``±dq`` window around each halo radius; returns
+    the background evaluated at every ``q`` (halo shoulders rise above it)."""
+    q = np.asarray(q, float); prof1d = np.asarray(prof1d, float)
+    m = (q >= beam_cut) & (q <= q_max)
+    for h in halo_qs:
+        m &= ~((q >= h - dq) & (q <= h + dq))
+    if m.sum() < deg + 1:
+        raise ValueError("not enough background q-points; widen beam_cut/q_max")
+    lq = np.log(np.clip(q, 1e-6, None))
+    coef = np.linalg.lstsq(np.vander(lq[m], deg + 1),
+                           np.log(np.clip(prof1d[m], 1e-3, None)), rcond=None)[0]
+    return np.exp(np.vander(lq, deg + 1) @ coef)
 
 
 def structural_halo_map(cube, center, q_per_px, halo_q, dq=0.06, flank_gap=0.12,

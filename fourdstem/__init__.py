@@ -76,7 +76,7 @@ from .analysis import (
     crystallinity_map, label_grains, grain_patterns, index_grains,
     seed_positions, index_seeds,
     radial_stack, classify_pixels, PixelClassification,
-    strict_vacuum_mask, peak_above_flank, significance, detector_map, amorphous_halo_peaks, ring_phase_evidence, structural_halo_map, halo_bump_maps,
+    strict_vacuum_mask, peak_above_flank, significance, detector_map, amorphous_halo_peaks, ring_phase_evidence, structural_halo_map, halo_bump_maps, halo_background_1d,
     measure_ellipticity, diagnose_cube,
     PhaseReport, analyze_phases,
 )
@@ -132,7 +132,7 @@ __all__ = [
     "crystallinity_map", "label_grains", "grain_patterns", "index_grains",
     "seed_positions", "index_seeds",
     "radial_stack", "classify_pixels", "PixelClassification",
-    "strict_vacuum_mask", "peak_above_flank", "significance", "detector_map", "amorphous_halo_peaks", "ring_phase_evidence", "structural_halo_map", "halo_bump_maps",
+    "strict_vacuum_mask", "peak_above_flank", "significance", "detector_map", "amorphous_halo_peaks", "ring_phase_evidence", "structural_halo_map", "halo_bump_maps", "halo_background_1d",
     "measure_ellipticity", "diagnose_cube",
     "PhaseReport", "analyze_phases",
     # insitu
