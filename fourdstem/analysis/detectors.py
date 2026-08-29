@@ -104,9 +104,57 @@ def detector_map(cube, center, q_per_px, q0, dq=0.03, flank=2.0, vacuum_mask=Non
     return significance(raw2d, vacuum_mask), raw2d
 
 
+def halo_bump_maps(cube, center, q_per_px, halo_qs, dq=0.05, beam_cut=0.15,
+                   q_max=1.1, deg=2, vacuum_mask=None, nbin=200, n_jobs=1, _stack=None):
+    """Bump maps at several halo radii using ONE global smooth background per pixel.
+
+    The right way to isolate a broad halo near the beam: fit a smooth curve (a
+    degree-``deg`` polynomial in log-log, i.e. a flexible power law — the beam tail
+    + small-angle background) to the pixel's radial profile over the **background
+    q-points** (everything above ``beam_cut`` and outside a ``±dq`` window of each
+    halo radius), subtract it, and read the leftover **bump** in each halo band.
+    Unlike flank lines this uses points on BOTH the low side (just above the beam)
+    and the high side, so it works for a low-q FSDP where a wide flank would fall
+    into the beam; unlike material-minus-vacuum it removes the material's OWN
+    background, not just the vacuum's.
+
+    ``halo_qs`` is the list of halo radii (1/A). Returns
+    ``{q: dict(sig, raw)}`` — vacuum-referenced significance and raw bump height
+    maps over the scan grid — plus the fitted background is implicit.
+    """
+    scan = cube.scan_shape
+    if _stack is None:
+        q, prof = radial_stack(cube, center, q_per_px, q_max=q_max + 0.05, nbin=nbin, n_jobs=n_jobs)
+    else:
+        q, prof = _stack
+    halo_qs = [float(h) for h in halo_qs]
+    bg = (q >= beam_cut) & (q <= q_max)
+    for h in halo_qs:
+        bg &= ~((q >= h - dq) & (q <= h + dq))
+    if bg.sum() < deg + 1:
+        raise ValueError("not enough background q-points to fit; widen beam_cut/q_max")
+    lq = np.log(np.clip(q, 1e-6, None))
+    X = np.vander(lq[bg], deg + 1)                     # (nbg, deg+1) design in log q
+    Xp = np.linalg.pinv(X)                             # (deg+1, nbg)
+    LP = np.log(np.clip(prof[:, bg], 1e-3, None))      # (Npix, nbg)
+    coef = LP @ Xp.T                                   # (Npix, deg+1)
+    Xall = np.vander(lq, deg + 1)                       # (nbin, deg+1)
+    bgfit = np.exp(coef @ Xall.T)                       # (Npix, nbin) smooth background
+    resid = prof - bgfit
+    if vacuum_mask is None:
+        vacuum_mask = strict_vacuum_mask(cube, center=center, q_per_px=q_per_px)
+    out = {}
+    for h in halo_qs:
+        band = (q >= h - dq) & (q <= h + dq)
+        raw = (np.clip(resid[:, band], 0, None).mean(1) if band.any()
+               else np.zeros(prof.shape[0])).reshape(scan)
+        out[h] = dict(sig=significance(raw, vacuum_mask), raw=raw)
+    return out
+
+
 def structural_halo_map(cube, center, q_per_px, halo_q, dq=0.06, flank_gap=0.12,
                         flank_w=0.05, vacuum_mask=None, q_max=1.2, nbin=200,
-                        n_jobs=1, _stack=None):
+                        beam_cut=0.14, n_jobs=1, _stack=None):
     """Structural amorphous-halo map: the FSDP **bump above the smooth background**.
 
     A plain annular detector rises with total scattering (thickness), and even a
@@ -118,6 +166,14 @@ def structural_halo_map(cube, center, q_per_px, halo_q, dq=0.06, flank_gap=0.12,
     A smooth (even steep) background lies on the line → residual ~0; only a real
     peak rises above it. Vacuum-referenced (:func:`significance`).
 
+    **Beam guard.** For a *low-q* FSDP the symmetric low flank ``halo_q -
+    flank_gap - flank_w`` can fall onto the bright, convex beam tail; anchoring
+    the baseline there ruins the fit and zeroes the bump everywhere. So the low
+    flank is clamped to start no lower than ``beam_cut``: if it would dip below,
+    it is placed at ``[beam_cut, beam_cut + flank_w]`` (a low anchor just above
+    the beam). This keeps the local straight-line baseline valid for a halo close
+    to the beam without hand-tuning ``flank_gap``.
+
     Returns ``(sig, raw)`` over the scan grid.
     """
     scan = cube.scan_shape
@@ -126,7 +182,12 @@ def structural_halo_map(cube, center, q_per_px, halo_q, dq=0.06, flank_gap=0.12,
     else:
         q, prof = _stack
     band = (q >= halo_q - dq) & (q <= halo_q + dq)
-    fl = ((q >= halo_q - flank_gap - flank_w) & (q <= halo_q - flank_gap)) | \
+    lo_start = halo_q - flank_gap - flank_w
+    if lo_start < beam_cut:                       # low flank would sit in the beam
+        lo_start, lo_end = beam_cut, beam_cut + flank_w
+    else:
+        lo_end = halo_q - flank_gap
+    fl = ((q >= lo_start) & (q <= lo_end)) | \
          ((q >= halo_q + flank_gap) & (q <= halo_q + flank_gap + flank_w))
     if band.sum() == 0 or fl.sum() < 2:
         raw = np.zeros(prof.shape[0])

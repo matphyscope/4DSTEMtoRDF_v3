@@ -271,6 +271,49 @@ def test_structural_halo_rejects_smooth_background():
     assert struct[lab == 2].mean() < 3                             # smooth bg rejected
 
 
+def test_structural_halo_beam_guard_low_q_fsdp():
+    # A *low-q* FSDP (bump close to the beam) over a steep convex power-law tail.
+    # A wide symmetric flank_gap would place the low flank inside the beam and zero
+    # the bump everywhere; the beam guard must clamp it above the beam so the real
+    # bump is flagged and a featureless steep background (no bump) is rejected.
+    from fourdstem.analysis.detectors import structural_halo_map
+    rng = np.random.default_rng(0)
+    Ny, Nx, det = 12, 12, 140
+    cy = cx = det / 2
+    yy, xx = np.mgrid[0:det, 0:det]
+    r = np.hypot(yy - cy, xx - cx)
+    qpp = 0.0043888
+    q = r * qpp
+
+    def bg(s):
+        return s / np.clip(q, 0.02, None) ** 2.2 + 2.0
+
+    def fsdp(a, q0=0.25, w=0.05):
+        return a * np.exp(-0.5 * ((q - q0) / w) ** 2)
+
+    cube = np.zeros((Ny, Nx, det, det), np.float32)
+    has = np.zeros((Ny, Nx), bool)
+    for iy in range(Ny):
+        for ix in range(Nx):
+            if iy < 2:
+                base = bg(0.02) * 0.05                    # vacuum
+            elif ix < 6:
+                base = bg(1.0) + fsdp(30.0); has[iy, ix] = True   # real halo
+            else:
+                base = bg(1.6)                            # steep smooth bg, NO halo
+            cube[iy, ix] = rng.poisson(np.clip(base, 0, None))
+    dc = fds.from_array(cube, q_per_px=qpp)
+    vac = np.zeros((Ny, Nx), bool); vac[:2] = True
+    mat = ~vac
+    # a deliberately wide gap whose low flank (0.25-0.16-0.05=0.04) sits in the beam
+    sig, raw = structural_halo_map(dc, (cx, cy), qpp, 0.25, dq=0.06,
+                                   flank_gap=0.16, flank_w=0.05, vacuum_mask=vac)
+    assert raw[has].mean() > 1.0                          # real bump survives the guard
+    assert raw[mat & ~has].mean() < 0.3 * raw[has].mean() # steep smooth bg -> ~0 bump
+    assert np.mean(sig[has] > 3) > 0.8
+    assert np.mean(sig[mat & ~has] > 3) < 0.1
+
+
 def test_ring_phase_evidence_finds_rings_not_amorphous():
     # a polycrystalline LiF ring patch in an otherwise amorphous film. Referenced
     # to the amorphous background, LiF ring evidence must be high in the patch and
