@@ -158,7 +158,7 @@ def detect_spots(max_pat, center, q_per_px, q_beam=0.15, q_max=1.15,
 
 
 def score_phases(rings_q, spots_q, candidates=None, tol=0.045, min_unique_spots=5,
-                 q_confirm_min=0.28):
+                 q_confirm_min=0.28, rings=None):
     """Per-phase verdict from measured ring/spot positions.
 
     Ownership is decided at the **measured** position, not the tabulated one: a
@@ -176,7 +176,7 @@ def score_phases(rings_q, spots_q, candidates=None, tol=0.045, min_unique_spots=
     "uniquely" matches whichever phase happens to own the sole large-d ring — a
     false positive. Such low-q rings still count toward ``matched``/``possible``.
     """
-    tbl = COMPOUND_RINGS
+    tbl = rings if rings is not None else COMPOUND_RINGS
     names = list(candidates) if candidates is not None else list(CANDIDATES)
     meas = np.atleast_1d(np.asarray(rings_q, float))
     meas = meas[np.isfinite(meas)]

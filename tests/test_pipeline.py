@@ -1342,3 +1342,41 @@ def test_substrate_rings_explain_low_d_ring():
     # and the d=4.18 ring stays a Li compound (Cu phases cannot reach d>3.3)
     ranked2 = fds.match_rings([0.239], rings=fds.ALL_RINGS, tol=0.02)
     assert ranked2[0][0] in ("Li2CO3", "Li3N")
+
+
+def test_electron_rings_lif_200_beats_111():
+    """Electron structure factor: LiF 200 (d~2.01) >> 111 (d~2.33).
+
+    111 ~ (f_F - f_Li) cancels; 200 ~ (f_F + f_Li) adds. The nominal table had
+    the opposite ordering, which is wrong for electron diffraction.
+    """
+    er = dict(fds.electron_rings("LiF", min_w=0.01))
+    d111 = min(er, key=lambda d: abs(d - 2.324))
+    d200 = min(er, key=lambda d: abs(d - 2.013))
+    assert abs(d200 - 2.013) < 0.03 and abs(d111 - 2.324) < 0.03
+    assert er[d200] > 3 * er[d111]              # 200 far stronger than 111
+
+
+def test_electron_rings_li2o_200_suppressed():
+    """Antifluorite Li2O: the 200 ring (d~2.31) is weak/absent vs 220 (d~1.63)."""
+    er = dict(fds.electron_rings("Li2O", min_w=0.0))
+    d220 = min(er, key=lambda d: abs(d - 1.633))
+    # 200 either falls below the keep threshold or is far weaker than 220
+    near200 = [w for d, w in er.items() if abs(d - 2.31) < 0.03]
+    assert abs(d220 - 1.633) < 0.03
+    assert (not near200) or (near200[0] < 0.2 * er[d220])
+
+
+def test_electron_rings_positions_match_crystallography():
+    """Computed d-spacings match the tabulated ring positions (structure is right).
+
+    Uses ``min_w=0`` so the check is on reflection *positions*, independent of
+    whether a reflection survives the electron-intensity cut (e.g. Li2O 200 is a
+    real lattice plane but is intensity-suppressed for electrons).
+    """
+    for c in ("LiF", "Li2O", "Li2S"):
+        ed = [d for d, _ in fds.electron_rings(c, min_w=0.0)]
+        for d0, _ in fds.COMPOUND_RINGS[c]:
+            if d0 < 1.3:
+                continue
+            assert any(abs(d0 - d) < 0.05 for d in ed), (c, d0, ed)
