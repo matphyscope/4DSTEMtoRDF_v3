@@ -105,7 +105,8 @@ def detector_map(cube, center, q_per_px, q0, dq=0.03, flank=2.0, vacuum_mask=Non
 
 
 def halo_bump_maps(cube, center, q_per_px, halo_qs, dq=0.05, beam_cut=0.15,
-                   q_max=1.1, deg=2, vacuum_mask=None, nbin=200, n_jobs=1, _stack=None):
+                   q_max=1.1, deg=2, vacuum_mask=None, nbin=200, n_jobs=1,
+                   bg_floor_pctl=50, _stack=None):
     """Bump maps at several halo radii using ONE global smooth background per pixel.
 
     The right way to isolate a broad halo near the beam: fit a smooth curve (a
@@ -155,7 +156,19 @@ def halo_bump_maps(cube, center, q_per_px, halo_qs, dq=0.05, beam_cut=0.15,
         if band.any():
             raw = np.clip(resid[:, band], 0, None).mean(1)
             bglev = np.clip(bgfit[:, band].mean(1), 1e-6, None)
-            contrast = raw / bglev
+            # ★Floor the background at the VACUUM band-background level before dividing.
+            # In near-vacuum/low-count pixels the fitted bg is tiny, so bump/bg explodes
+            # and its scatter inflates the vacuum MAD -> csig collapses and NOTHING clears
+            # threshold. Flooring at the vacuum's own bg keeps vacuum contrast well-behaved
+            # (no blow-up) while leaving material contrast untouched (material bg >> floor),
+            # so a real halo still stands out and thick-but-flat material (contrast~0) stays
+            # below threshold. Floor from vacuum only, so it can't wash out weak material.
+            floor = 0.0
+            if bg_floor_pctl:
+                vm = np.asarray(vacuum_mask, bool).ravel() if vacuum_mask is not None else None
+                if vm is not None and vm.any():
+                    floor = float(np.percentile(bglev[vm], bg_floor_pctl))
+            contrast = raw / np.maximum(bglev, floor if floor > 0 else 1e-6)
         else:
             raw = np.zeros(prof.shape[0]); bglev = np.ones(prof.shape[0]); contrast = raw.copy()
         raw = raw.reshape(scan); contrast = contrast.reshape(scan); bglev = bglev.reshape(scan)
