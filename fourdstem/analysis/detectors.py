@@ -106,7 +106,7 @@ def detector_map(cube, center, q_per_px, q0, dq=0.03, flank=2.0, vacuum_mask=Non
 
 def halo_bump_maps(cube, center, q_per_px, halo_qs, dq=0.05, beam_cut=0.15,
                    q_max=1.1, deg=2, vacuum_mask=None, nbin=200, n_jobs=1,
-                   bg_floor_pctl=50, _stack=None):
+                   bg_floor_pctl=0, _stack=None):
     """Bump maps at several halo radii using ONE global smooth background per pixel.
 
     The right way to isolate a broad halo near the beam: fit a smooth curve (a
@@ -156,13 +156,12 @@ def halo_bump_maps(cube, center, q_per_px, halo_qs, dq=0.05, beam_cut=0.15,
         if band.any():
             raw = np.clip(resid[:, band], 0, None).mean(1)
             bglev = np.clip(bgfit[:, band].mean(1), 1e-6, None)
-            # ★Floor the background at the VACUUM band-background level before dividing.
-            # In near-vacuum/low-count pixels the fitted bg is tiny, so bump/bg explodes
-            # and its scatter inflates the vacuum MAD -> csig collapses and NOTHING clears
-            # threshold. Flooring at the vacuum's own bg keeps vacuum contrast well-behaved
-            # (no blow-up) while leaving material contrast untouched (material bg >> floor),
-            # so a real halo still stands out and thick-but-flat material (contrast~0) stays
-            # below threshold. Floor from vacuum only, so it can't wash out weak material.
+            # Optional background floor (bg_floor_pctl, default 0 = OFF). The vacuum-
+            # referenced MAD in significance() is already median-based and robust to the
+            # few low-count vacuum pixels whose bump/bg blows up, so flooring is normally
+            # unnecessary and — when the vacuum background itself is near zero — flooring at
+            # the vacuum bg is tiny and actually inflates the vacuum-contrast spread,
+            # collapsing csig. Leave it off unless a specific dataset needs it.
             floor = 0.0
             if bg_floor_pctl:
                 vm = np.asarray(vacuum_mask, bool).ravel() if vacuum_mask is not None else None
