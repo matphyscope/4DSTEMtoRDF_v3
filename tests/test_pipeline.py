@@ -1364,13 +1364,13 @@ def test_cepstral_periodicity_repeats_for_crystal_only():
             return -1.0
         return fds.cepstral_periodicity(pat, lat["g1"], lat["g2"], QPP)["score"]
 
-    assert score(grain(90, 1)) >= 4.0                    # strong crystal repeats
-    assert score(grain(35, 5)) >= 4.0                    # weaker crystal still repeats
+    assert score(grain(90, 1)) >= 0.5                    # strong crystal repeats
+    assert score(grain(35, 5)) >= 0.5                    # weaker crystal still repeats
     for seed in (2, 7, 11, 15):                          # amorphous rings never repeat
         rng = np.random.default_rng(seed)
         ring = np.clip(beam + 130 * np.exp(-((r - 24) / 2.0) ** 2)
                        + 5 + 3 * rng.standard_normal((N, N)), 0, None)
-        assert score(ring) < 4.0
+        assert score(ring) < 0.5
 
 
 def test_azimuthal_discreteness_spots_vs_ring():

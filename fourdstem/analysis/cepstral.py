@@ -439,31 +439,32 @@ def spot_lattice(spots, center, q_per_px, weights=None, min_angle=15.0,
 
 
 def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
-                         highpass="auto", n_orders=3, bg_win=9, sep=5, first_min=4.0):
+                         highpass="auto", n_orders=3, half_width=0.6, step=0.25,
+                         smooth=1.0, tang_min=0.4):
     """Translational-periodicity test — the defining crystallinity property.
 
-    A crystal has long-range translational order: its cepstral (EWPC) shows peaks
-    not only at the lattice vector ``a`` but at ``2a, 3a, …`` — the vector *repeats*.
-    An amorphous phase has only short-range order: its cepstral has a first shell
-    (the nearest-neighbour halo) but **nothing at 2a** — the vector does not repeat.
-    So, crucially, this cannot be faked by an amorphous ring the way |q|- or
-    lattice-*matching* can: matching only checks the first application (which both
-    satisfy); repetition checks the second, which only a crystal survives.
+    A crystal has long-range translational order: its cepstral (EWPC) shows an
+    *isolated* peak not only at the lattice vector ``a`` but at ``2a, 3a, …`` — the
+    vector *repeats*. This cannot be faked by matching (which only checks the first
+    application, satisfied by amorphous too); only repetition, checked here, needs a
+    crystal.
 
-    Given the reciprocal basis ``g1`` (and optional ``g2``) from the NBD diffraction
-    spots, the real-space lattice vectors are ``a_i`` with ``a_i·g_j = δ_ij`` (for a
-    single vector, ``a = g/|g|²``). The cepstral is background-subtracted; at each
-    predicted point ``n·a_i`` we measure the local-peak significance
-    ``(resid − median)/MAD`` (checking *predicted* positions sidesteps blind peak
-    detection). Returns ``{score, orders, a_vectors, dr}`` where ``orders[i]`` lists
-    the peak significance ``(peak − median)/MAD`` at ``n·a_i`` for ``n = 1…n_orders``
-    (each the best peak within a small window, tolerating sub-pixel / lattice
-    distortion). A vector *repeats* only if it applies once (1st-order significance
-    ≥ ``first_min``) AND again at a higher order (2nd OR 3rd ≥ ``first_min``);
-    ``score`` is the min higher-order significance over the basis vectors that repeat
-    (0 if any fails). Crystal ⇒ score ≫ 0; amorphous ⇒ score ≈ 0.
+    Rather than pre-detecting 2-D peaks and matching (fragile), each predicted point
+    ``n·a_i`` is **verified from line profiles** through it: a genuine lattice peak is
+    concave-down (a maximum) BOTH along the vector (radial) AND perpendicular to it
+    (tangential). An amorphous ring is concave radially too — it has cepstral shells
+    at ``a, 2a, …`` from the halo harmonics — but is **flat tangentially** (the ring
+    is extended along the angle), so the tangential curvature separates a lattice
+    *point* from a *ring*. Curvature is the negative second derivative of the
+    (interpolated, lightly smoothed) line profile; the tangential curvature is
+    normalised by the radial curvature of the first-order peak. A point *applies* when
+    it is a radial peak AND its normalised tangential curvature ≥ ``tang_min``; a
+    vector *repeats* when it applies at 1st order AND at 2nd or 3rd. ``score`` is the
+    min repeat strength over the basis vectors (0 if any fails): crystal ⇒ ≈ 1+,
+    amorphous ⇒ ≈ 0. Returns ``{score, orders, a_vectors, dr}`` where ``orders[i]``
+    lists ``(tang_norm, applies)`` for ``n = 1…n_orders``.
     """
-    from scipy.ndimage import median_filter, maximum_filter
+    from scipy.ndimage import map_coordinates, gaussian_filter1d
     hp = highpass
     if hp == "auto":
         hp = max(4, int(np.asarray(pattern).shape[0]) // 32)
@@ -471,52 +472,51 @@ def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
     n = cep.shape[0]
     cc = n // 2
     dr = quefrency_per_px(n, q_per_px)
-    resid = cep - median_filter(cep, size=int(bg_win))
-    mxf = maximum_filter(resid, size=int(sep))
-    rr = _radius_px(cep.shape)
-    band = rr >= (1.0 / dr if dr > 0 else 3.0)
-    med = float(np.median(resid[band]))
-    mad = 1.4826 * float(np.median(np.abs(resid[band] - med))) + 1e-12
 
     g1 = np.asarray(g1, float)
     if g2 is not None:
         G = np.array([g1, np.asarray(g2, float)])
-        A = np.linalg.inv(G).T                     # a_i · g_j = δ_ij (direct lattice)
-        avs = [A[0], A[1]]
+        avs = [np.linalg.inv(G).T[0], np.linalg.inv(G).T[1]]  # a_i·g_j = δ_ij
     else:
-        avs = [g1 / (g1 @ g1)]                       # 1-D: |a| = 1/|g| along g
+        avs = [g1 / (g1 @ g1)]                                # 1-D: |a| = 1/|g|
 
-    win = max(1, int(round(0.15 / dr)))                # sub-pixel / distortion tolerance (~0.15 Å)
-
-    def sig_at(a, ns):
-        # a crystal's n*a lands on an ISOLATED lattice peak; an amorphous ripple slope
-        # does not. Look for a local-maximum pixel within a small absolute window of
-        # the predicted point (tolerates sub-pixel offset without reaching far ripples).
-        px = cc + ns * a[0] / dr
-        py = cc + ns * a[1] / dr
-        ix, iy = int(round(px)), int(round(py))
-        if not (win + sep <= ix < n - win - sep and win + sep <= iy < n - win - sep):
+    def curv(origin_px, dir_hat):
+        # negative 2nd derivative of the line profile at origin along dir_hat:
+        # concave-down (a peak) -> positive
+        ts = np.arange(-half_width, half_width + 1e-9, step * dr)
+        xs = origin_px[0] + ts / dr * dir_hat[0]
+        ys = origin_px[1] + ts / dr * dir_hat[1]
+        if xs.min() < 1 or xs.max() > n - 2 or ys.min() < 1 or ys.max() > n - 2:
             return None
-        sub = resid[iy - win:iy + win + 1, ix - win:ix + win + 1]
-        ismax = sub >= mxf[iy - win:iy + win + 1, ix - win:ix + win + 1] - 1e-12
-        if ismax.any():
-            return float((sub[ismax].max() - med) / mad), True    # isolated peak found
-        return float((resid[iy, ix] - med) / mad), False          # no local max nearby
-
-    def is_peak(o):
-        return o is not None and o[0] >= first_min and o[1]
+        p = gaussian_filter1d(map_coordinates(cep, [ys, xs], order=1), smooth)
+        d2 = np.gradient(np.gradient(p, ts), ts)
+        return -float(d2[len(ts) // 2])
 
     orders = {}
-    rep = []                                            # per-vector higher-order strength
+    rep = []
     for i, a in enumerate(avs):
-        sigs = [sig_at(a, ns) for ns in range(1, int(n_orders) + 1)]
-        orders[i] = sigs
-        if not is_peak(sigs[0]):                        # must apply once (isolated peak)
+        L = float(np.hypot(*a))
+        ah = a / L
+        tg = np.array([-ah[1], ah[0]])                       # perpendicular (tangential)
+        rad1 = curv((cc + a[0] / dr, cc + a[1] / dr), ah)    # 1st-order radial curvature = ref
+        ref = rad1 if (rad1 and rad1 > 0) else None
+        os = []
+        for ns in range(1, int(n_orders) + 1):
+            o = (cc + ns * a[0] / dr, cc + ns * a[1] / dr)
+            rad = curv(o, ah)
+            tang = curv(o, tg)
+            if ref is None or rad is None or tang is None:
+                os.append((0.0, False))
+                continue
+            tnorm = tang / ref                               # isolated point -> ~1; ring -> ~0
+            os.append((round(tnorm, 2), bool(rad > 0 and tnorm >= tang_min)))
+        orders[i] = os
+        if not os[0][1]:                                     # must apply once (isolated 2-D peak)
             rep.append(0.0)
             continue
-        higher = [o[0] for o in sigs[1:] if is_peak(o)]  # repeats to 2nd OR 3rd (isolated peak)
+        higher = [o[0] for o in os[1:] if o[1]]              # repeats at 2nd OR 3rd
         rep.append(max(higher) if higher else 0.0)
-    score = float(min(rep)) if rep else 0.0             # every basis vector must repeat
+    score = float(min(rep)) if rep else 0.0
     return {"score": score, "orders": orders, "a_vectors": avs, "dr": dr}
 
 
