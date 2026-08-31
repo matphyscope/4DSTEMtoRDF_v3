@@ -30,7 +30,7 @@ from .decomposition import (
 from .interface import localize_interface
 from .cepstral import (
     ewpc_pattern, quefrency_per_px, cepstral_radial_profile,
-    fluctuation_image, fluctuation_multiband, cepstral_peakiness_image, ewpc_mean, ewpc_profiles,
+    fluctuation_image, fluctuation_multiband, fluctuation_profile, cepstral_peakiness_image, ewpc_mean, ewpc_profiles,
 )
 from .rdf import (
     RDFConfig,
@@ -82,7 +82,7 @@ __all__ = [
     "DecompositionResult", "ProfileDecomposition", "nmf_decompose", "pca_decompose",
     "decompose_profiles", "cluster_cube", "reconstruct", "localize_interface",
     "ewpc_pattern", "quefrency_per_px", "cepstral_radial_profile",
-    "fluctuation_image", "fluctuation_multiband", "cepstral_peakiness_image", "ewpc_mean", "ewpc_profiles",
+    "fluctuation_image", "fluctuation_multiband", "fluctuation_profile", "cepstral_peakiness_image", "ewpc_mean", "ewpc_profiles",
     "RDFConfig", "RDFResult", "scattering_terms", "damping_window", "sine_ft",
     "reduce_intensity", "reduce_profiles", "pattern_to_rdf", "save_rdf",
     "load_rdf", "rdf_quality",

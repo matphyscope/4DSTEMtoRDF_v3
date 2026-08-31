@@ -1196,6 +1196,44 @@ def test_fluctuation_image_discriminates_order():
     assert F[:, :Rx // 2].mean() > F[:, Rx // 2:].mean()     # ordered brighter
 
 
+def test_fluctuation_profile_sweeps_quefrency():
+    # paper Fig 8: narrow window swept across quefrency -> F(r); shape + a peak
+    from tests.synthetic import ring_pattern, bragg_pattern
+    N, qpp = 96, 0.05
+    Ry, Rx = 4, 6
+    cube = np.empty((Ry, Rx, N, N))
+    for iy in range(Ry):
+        for ix in range(Rx):
+            if ix < Rx // 2:
+                cube[iy, ix] = bragg_pattern((N, N), spots=6, radius=22, amp=6) + 2
+            else:
+                cube[iy, ix] = ring_pattern((N, N), rings=((22, 4, 1.0),),
+                                            central_beam=8.0) + 2
+    dc = fds.from_array(cube, q_per_px=qpp)
+    r, F = fds.fluctuation_profile(dc, q_per_px=qpp, r_min=0.4, r_max=2.0,
+                                   width=0.2, n_jobs=1)
+    assert r.size == F.size and r.size > 3
+    assert np.all(np.diff(r) > 0)
+    assert np.isfinite(F).all() and F.max() > F.min()          # a real modulation
+    # masking to the ordered half must raise the mean fluctuation vs disordered half
+    mo = np.zeros((Ry, Rx), bool); mo[:, :Rx // 2] = True
+    md = np.zeros((Ry, Rx), bool); md[:, Rx // 2:] = True
+    _, Fo = fds.fluctuation_profile(dc, q_per_px=qpp, r_min=0.4, r_max=2.0,
+                                    width=0.2, mask=mo, n_jobs=1)
+    _, Fd = fds.fluctuation_profile(dc, q_per_px=qpp, r_min=0.4, r_max=2.0,
+                                    width=0.2, mask=md, n_jobs=1)
+    assert Fo.max() > Fd.max()
+    # percentile reducer surfaces the minority ordered phase above the mean
+    _, Fp = fds.fluctuation_profile(dc, q_per_px=qpp, r_min=0.4, r_max=2.0,
+                                    width=0.2, reducer="p90", n_jobs=1)
+    _, Fm = fds.fluctuation_profile(dc, q_per_px=qpp, r_min=0.4, r_max=2.0,
+                                    width=0.2, reducer="mean", n_jobs=1)
+    assert Fp.max() >= Fm.max()
+    with pytest.raises(ValueError):
+        fds.fluctuation_profile(dc, q_per_px=qpp, r_min=0.4, r_max=2.0,
+                                width=0.2, reducer=150.0, n_jobs=1)
+
+
 def test_ewpc_profiles_shape():
     from tests.synthetic import ring_pattern
     N = 64

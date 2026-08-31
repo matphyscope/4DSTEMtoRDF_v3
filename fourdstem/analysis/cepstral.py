@@ -171,6 +171,58 @@ def fluctuation_multiband(cube, bands, q_per_px, offset=1.0, window=True,
             for j in range(len(bands))]
 
 
+def fluctuation_profile(cube, q_per_px, r_min, r_max, width=0.2, step=None,
+                        mask=None, offset=1.0, window=True, reducer="mean",
+                        n_jobs=1, progress=False):
+    """FC-STEM fluctuation profile ``F(r)`` vs quefrency (paper Fig. 8).
+
+    Sweeps a narrow quefrency window of fixed ``width`` Å (the paper uses
+    ``r_out - r_in = 0.02 nm = 0.2 Å``) across ``[r_min, r_max]``. For each window
+    it evaluates the per-position fluctuation ``F(Rp)`` (Eq. 3) and reduces it over
+    probe positions (mean by default), giving a single number per quefrency. Peaks
+    in ``F(r)`` mark inter-atomic distances at which the phases fluctuate distinctly
+    — the paper uses them to pick the annular bands ``[r_in, r_out]`` that separate
+    phases. ``mask`` (scan-shaped bool) restricts the probe-position reduction to a
+    region (e.g. the material).
+
+    ``reducer`` sets how F is reduced over probe positions at each quefrency:
+    ``"mean"`` (paper Fig. 8; best when phases occupy large areas), ``"median"``,
+    ``"max"``, or a percentile in ``(0, 100]`` as a float or ``"p95"`` string. A high
+    percentile / max surfaces a *minority* phase (e.g. a sparse crystalline grain)
+    whose signature the mean would wash out. Returns ``(r_centers, F)``.
+    """
+    if step is None:
+        step = width / 2.0
+    centers = np.arange(r_min + width / 2.0, r_max - width / 2.0 + 1e-9, step)
+    if centers.size == 0:
+        raise ValueError(f"[{r_min},{r_max}] Å too narrow for window width {width} Å")
+    bands = [(float(c - width / 2.0), float(c + width / 2.0)) for c in centers]
+    maps = fluctuation_multiband(cube, bands, q_per_px, offset=offset,
+                                 window=window, n_jobs=n_jobs, progress=progress)
+    sm = None if mask is None else np.asarray(mask, bool)
+
+    pctl = None
+    if isinstance(reducer, (int, float)) and not isinstance(reducer, bool):
+        pctl = float(reducer)
+    elif isinstance(reducer, str) and reducer.startswith("p") and reducer[1:].replace(".", "", 1).isdigit():
+        pctl = float(reducer[1:])
+    if pctl is not None and not (0.0 < pctl <= 100.0):
+        raise ValueError(f"percentile reducer must be in (0,100], got {pctl}")
+
+    prof = []
+    for m in maps:
+        v = m[sm] if sm is not None else np.asarray(m).ravel()
+        if pctl is not None:
+            prof.append(float(np.percentile(v, pctl)))
+        elif reducer == "median":
+            prof.append(float(np.median(v)))
+        elif reducer == "max":
+            prof.append(float(np.max(v)))
+        else:
+            prof.append(float(np.mean(v)))
+    return centers, np.asarray(prof, float)
+
+
 def ewpc_mean(cube, offset=1.0, window=True, reducer="mean", n_jobs=1,
               progress=False):
     """Mean (or median) EWPC pattern over all probe positions — a representative
