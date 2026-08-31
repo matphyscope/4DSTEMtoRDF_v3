@@ -1255,6 +1255,58 @@ def test_ewpc_pad_refines_quefrency_and_enables_narrow_band():
         fds.ewpc_pattern(pat, pad=8)                    # pad smaller than pattern
 
 
+def _square_spot_lattice(N, g_px=18, amp=10.0, sig=1.2):
+    img = np.zeros((N, N)); c = N // 2
+    yy, xx = np.mgrid[0:N, 0:N]
+    for h in range(-3, 4):
+        for k in range(-3, 4):
+            if h == 0 and k == 0:
+                continue
+            img += amp * np.exp(-(((xx - (c + h * g_px)) ** 2 +
+                                   (yy - (c + k * g_px)) ** 2) / (2 * sig ** 2)))
+    return img
+
+
+def test_cepstral_lattice_gvectors_crystal_vs_amorphous():
+    from tests.synthetic import ring_pattern
+    N, qpp, pad = 128, 0.02, 512
+    g_px = 18
+    cryst = _square_spot_lattice(N, g_px=g_px) + 1.0
+    amorph = ring_pattern((N, N), rings=((26, 7, 1.0),), central_beam=6.0) + 1.0
+    gc, ic = fds.cepstral_lattice_gvectors(cryst, qpp, r_min=1.0, r_max=20.0,
+                                           pad=pad, min_prom=0.2)
+    assert len(gc) > 0 and ic["lattice_frac"] > 0.8
+    # reciprocal basis satisfies g_i . v_j = delta_ij
+    v1, v2, g1, g2 = ic["v1"], ic["v2"], ic["g1"], ic["g2"]
+    assert abs(g1 @ v1 - 1) < 1e-6 and abs(g1 @ v2) < 1e-6
+    assert abs(g2 @ v2 - 1) < 1e-6 and abs(g2 @ v1) < 1e-6
+    # recovered lattice period matches the spot spacing: |g| = spot q-spacing
+    assert abs(np.linalg.norm(g1) - g_px * qpp) < 0.03
+    # amorphous rings are rejected by the lattice-consistency gate
+    ga, ia = fds.cepstral_lattice_gvectors(amorph, qpp, r_min=1.0, r_max=20.0,
+                                           pad=pad, min_prom=0.2)
+    assert len(ga) == 0 and "lattice" in ia["reason"]
+
+
+def test_cepstral_discreteness_image_crystal_vs_amorphous():
+    from tests.synthetic import ring_pattern
+    N, qpp, pad = 128, 0.02, 512
+    Ry, Rx = 4, 6
+    cube = np.empty((Ry, Rx, N, N))
+    for iy in range(Ry):
+        for ix in range(Rx):
+            cube[iy, ix] = (_square_spot_lattice(N) if ix < Rx // 2 else
+                            ring_pattern((N, N), rings=((26, 7, 1.0),),
+                                         central_beam=6.0)) + 1.0
+    dc = fds.from_array(cube, q_per_px=qpp)
+    D = fds.cepstral_discreteness_image(dc, 1.0, 20.0, qpp, pad=pad, n_jobs=1)
+    assert D.shape == (Ry, Rx)
+    assert D[:, :Rx // 2].mean() > D[:, Rx // 2:].mean()      # crystal more discrete
+    m = np.zeros((Ry, Rx), bool); m[:, :Rx // 2] = True
+    Dm = fds.cepstral_discreteness_image(dc, 1.0, 20.0, qpp, pad=pad, mask=m, n_jobs=1)
+    assert np.all(Dm[:, Rx // 2:] == 0.0)                      # masked-out stays 0
+
+
 def test_ewpc_profiles_shape():
     from tests.synthetic import ring_pattern
     N = 64
