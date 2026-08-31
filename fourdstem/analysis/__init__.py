@@ -47,7 +47,7 @@ from .rdf import (
 )
 from .phases import (
     CANDIDATES, PHASE_DISTANCE, PhaseEvidence, DiffractionReport,
-    detect_rings, detect_spots, ring_azimuthal_spots, score_phases, analyze_diffraction,
+    detect_rings, detect_spots, ring_azimuthal_spots, azimuthal_discreteness, score_phases, analyze_diffraction,
     phase_ring_profile, decompose_fractions,
     measure_ellipticity, diagnose_cube,
     PhaseReport, analyze_phases,
@@ -90,7 +90,7 @@ __all__ = [
     "reference_degeneracy",
     "CRYSTALS", "electron_rings", "electron_ring_table",
     "CANDIDATES", "PHASE_DISTANCE", "PhaseEvidence", "DiffractionReport",
-    "detect_rings", "detect_spots", "ring_azimuthal_spots", "score_phases", "analyze_diffraction",
+    "detect_rings", "detect_spots", "ring_azimuthal_spots", "azimuthal_discreteness", "score_phases", "analyze_diffraction",
     "phase_ring_profile", "decompose_fractions",
     "index_gvectors", "index_pattern", "spots_to_gvectors", "phase_reflections",
     "crystallinity_map", "label_grains", "grain_patterns", "index_grains",

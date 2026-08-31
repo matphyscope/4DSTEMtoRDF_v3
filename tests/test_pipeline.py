@@ -1335,6 +1335,27 @@ def test_cepstral_lattice_subpixel_and_noise():
     assert len(gs) > 0 and info["lattice_frac"] >= 0.6
 
 
+def test_azimuthal_discreteness_spots_vs_ring():
+    # discrete Bragg spots vs a continuous ring at the SAME radius: |q| can't tell
+    # them apart, but the angular discreteness does (crystalline high, amorphous low)
+    N, QPP = 128, 0.02
+    c = N // 2
+    yy, xx = np.mgrid[0:N, 0:N]
+    r = np.hypot(xx - c, yy - c)
+    rng = np.random.default_rng(0)
+    beam = 6000 * np.exp(-(r / 4) ** 2)
+    spots = beam.copy()
+    for a in np.deg2rad([0, 60, 120, 180, 240, 300]):
+        x, y = c + 24 * np.cos(a), c + 24 * np.sin(a)
+        spots += 100 * np.exp(-(((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.4 ** 2)))
+    spots = np.clip(spots + 5 + 2 * rng.standard_normal((N, N)), 0, None)
+    ring = np.clip(beam + 100 * np.exp(-((r - 24) / 2.0) ** 2)
+                   + 5 + 2 * rng.standard_normal((N, N)), 0, None)
+    ds, _ = fds.azimuthal_discreteness(spots, (c, c), QPP, 0.35, 0.6)
+    dr, _ = fds.azimuthal_discreteness(ring, (c, c), QPP, 0.35, 0.6)
+    assert ds > 15 and dr < 8 and ds > 3 * dr
+
+
 def test_spot_lattice_reciprocal_basis_from_nbd():
     # NBD Bragg spots (strong central beam) -> reciprocal basis, no cepstral needed
     N, QPP = 128, 0.02

@@ -157,6 +157,41 @@ def detect_spots(max_pat, center, q_per_px, q_beam=0.15, q_max=1.15,
             for x, y in zip(xs, ys)]
 
 
+def azimuthal_discreteness(pattern, center, q_per_px, q_lo, q_hi, n_theta=180,
+                           dq_bins=None):
+    """Angular discreteness of a pattern over the radius band ``[q_lo, q_hi]`` (1/Å).
+
+    Distinguishes **discrete Bragg spots (crystalline)** from a **continuous ring
+    (amorphous)** — which ``|q|`` alone cannot: a ring has intensity at *every*
+    angle, so any same-radius vector finds a partner, but a crystal has intensity
+    only at *discrete* angles. Polar-transforms the pattern and, at each radius in
+    the band, measures the azimuthal peakiness ``(max - median)/MAD`` of the
+    intensity-vs-angle profile. Returns the maximum over the band: HIGH ⇒ a sharp
+    angular spot exists at some radius (crystalline); LOW (≈ noise, ~3-5) ⇒ smooth
+    rings only (amorphous). ``score, q_at`` — the score and the radius where it
+    peaks.
+    """
+    from ..preprocess.transform import polar_transform
+    center = _resolve_center(pattern, center)
+    r_max = float(q_hi) / q_per_px + 3.0
+    polar, r_ax, _ = polar_transform(pattern, center, n_theta=int(n_theta), r_max=r_max)
+    lo, hi = float(q_lo) / q_per_px, float(q_hi) / q_per_px
+    best, q_at = 0.0, float(q_lo)
+    for ri in range(len(r_ax)):
+        if not (lo <= r_ax[ri] <= hi):
+            continue
+        prof = polar[:, ri]
+        prof = prof[np.isfinite(prof)]
+        if prof.size < 12:
+            continue
+        med = float(np.median(prof))
+        mad = 1.4826 * float(np.median(np.abs(prof - med))) + 1e-9
+        score = (float(prof.max()) - med) / mad
+        if score > best:
+            best, q_at = score, float(r_ax[ri] * q_per_px)
+    return best, q_at
+
+
 def ring_azimuthal_spots(pattern, center, q_per_px, ring_q, dq=0.03, n_theta=360,
                          max_spots=10, min_prom_frac=0.06, min_sep_deg=12.0,
                          min_nsig=4.0, min_contrast=0.0):
