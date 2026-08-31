@@ -450,16 +450,18 @@ def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
     crystal.
 
     Rather than pre-detecting 2-D peaks and matching (fragile), each predicted point
-    ``n·a_i`` is **verified from line profiles** through it: a genuine lattice peak is
-    concave-down (a maximum) BOTH along the vector (radial) AND perpendicular to it
-    (tangential). An amorphous ring is concave radially too — it has cepstral shells
-    at ``a, 2a, …`` from the halo harmonics — but is **flat tangentially** (the ring
-    is extended along the angle), so the tangential curvature separates a lattice
-    *point* from a *ring*. Curvature is the negative second derivative of the
-    (interpolated, lightly smoothed) line profile; the tangential curvature is
-    normalised by the radial curvature of the first-order peak. A point *applies* when
-    it is a radial peak AND its normalised tangential curvature ≥ ``tang_min``; a
-    vector *repeats* when it applies at 1st order AND at 2nd or 3rd. ``score`` is the
+    ``n·a_i`` is **verified from line profiles** through it. A genuine lattice peak is
+    a maximum — **1st derivative ≈ 0 (stationary) AND 2nd derivative < 0 (concave)** —
+    BOTH along the vector (radial) AND perpendicular to it (tangential). The
+    stationarity is tested as ``|d1/d2| ≤ peak_tol`` (the parabola vertex lands within
+    tolerance of the predicted point). An amorphous ring is a maximum radially too —
+    it has cepstral shells at ``a, 2a, …`` from the halo harmonics — but is **flat
+    tangentially** (``d2 ≈ 0``, the ring is extended along the angle), so the
+    tangential curvature separates a lattice *point* from a *ring*. The tangential
+    curvature (``−d2``) is normalised by the radial curvature of the first-order peak.
+    A point *applies* when it is a maximum radially AND tangentially with normalised
+    tangential curvature ≥ ``tang_min``; a vector *repeats* when it applies at 1st
+    order AND at 2nd or 3rd. ``score`` is the
     min repeat strength over the basis vectors (0 if any fails): crystal ⇒ ≈ 1+,
     amorphous ⇒ ≈ 0. Returns ``{score, orders, a_vectors, dr}`` where ``orders[i]``
     lists ``(tang_norm, applies)`` for ``n = 1…n_orders``.
@@ -480,36 +482,48 @@ def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
     else:
         avs = [g1 / (g1 @ g1)]                                # 1-D: |a| = 1/|g|
 
-    def curv(origin_px, dir_hat):
-        # negative 2nd derivative of the line profile at origin along dir_hat:
-        # concave-down (a peak) -> positive
+    def deriv(origin_px, dir_hat):
+        # 1st and 2nd derivative of the line profile at origin along dir_hat.
+        # A peak here needs d1 ≈ 0 (stationary) AND d2 < 0 (concave-down).
         ts = np.arange(-half_width, half_width + 1e-9, step * dr)
         xs = origin_px[0] + ts / dr * dir_hat[0]
         ys = origin_px[1] + ts / dr * dir_hat[1]
         if xs.min() < 1 or xs.max() > n - 2 or ys.min() < 1 or ys.max() > n - 2:
             return None
         p = gaussian_filter1d(map_coordinates(cep, [ys, xs], order=1), smooth)
-        d2 = np.gradient(np.gradient(p, ts), ts)
-        return -float(d2[len(ts) // 2])
+        d1 = np.gradient(p, ts)
+        d2 = np.gradient(d1, ts)
+        i0 = len(ts) // 2
+        return float(d1[i0]), float(d2[i0])
 
+    def is_peak(d, tol):
+        # d = (d1, d2). Peak: stationary (|vertex offset| = |d1/d2| <= tol) AND concave (d2 < 0).
+        if d is None:
+            return False, 0.0
+        d1, d2 = d
+        if d2 >= 0:
+            return False, 0.0                                # not concave -> not a maximum
+        stationary = abs(d1 / d2) <= tol                     # peak vertex within tol of the point
+        return bool(stationary), -d2                          # curvature magnitude (concavity)
+
+    peak_tol = 0.5 * half_width                               # vertex must be within ~half the window
     orders = {}
     rep = []
     for i, a in enumerate(avs):
         L = float(np.hypot(*a))
         ah = a / L
         tg = np.array([-ah[1], ah[0]])                       # perpendicular (tangential)
-        rad1 = curv((cc + a[0] / dr, cc + a[1] / dr), ah)    # 1st-order radial curvature = ref
-        ref = rad1 if (rad1 and rad1 > 0) else None
+        _, ref = is_peak(deriv((cc + a[0] / dr, cc + a[1] / dr), ah), peak_tol)  # 1st-order radial curvature
+        ref = ref if ref > 0 else None
         os = []
         for ns in range(1, int(n_orders) + 1):
             o = (cc + ns * a[0] / dr, cc + ns * a[1] / dr)
-            rad = curv(o, ah)
-            tang = curv(o, tg)
-            if ref is None or rad is None or tang is None:
-                os.append((0.0, False))
-                continue
-            tnorm = tang / ref                               # isolated point -> ~1; ring -> ~0
-            os.append((round(tnorm, 2), bool(rad > 0 and tnorm >= tang_min)))
+            pr, cr = is_peak(deriv(o, ah), peak_tol)         # radial:  1st deriv 0, 2nd deriv < 0
+            pt, ct = is_peak(deriv(o, tg), peak_tol)         # tangential: 1st deriv 0, 2nd deriv < 0
+            if ref is None:
+                os.append((0.0, False)); continue
+            tnorm = ct / ref                                 # isolated point -> ~1; ring -> ~0 (flat tangentially)
+            os.append((round(tnorm, 2), bool(pr and pt and tnorm >= tang_min)))
         orders[i] = os
         if not os[0][1]:                                     # must apply once (isolated 2-D peak)
             rep.append(0.0)
