@@ -1380,3 +1380,35 @@ def test_electron_rings_positions_match_crystallography():
             if d0 < 1.3:
                 continue
             assert any(abs(d0 - d) < 0.05 for d in ed), (c, d0, ed)
+
+
+def test_cepstral_peakiness_separates_crystalline_from_amorphous():
+    """EWPC peakiness is high for a spotty (crystalline) pattern, low for a
+    diffuse halo (amorphous)."""
+    Sy, Sx, H, W = 6, 6, 64, 64
+    rng = np.random.default_rng(11)
+    yy, xx = np.mgrid[0:H, 0:W]
+    cx, cy = W / 2, H / 2
+    rr = np.hypot(xx - cx, yy - cy)
+    beam = lambda a: a * np.exp(-rr ** 2 / 6)
+
+    def spots(r0, n, a):
+        im = np.zeros((H, W))
+        for k in range(n):
+            t = 2 * np.pi * k / n
+            im += a * np.exp(-((xx - cx - r0 * np.cos(t)) ** 2 +
+                               (yy - cy - r0 * np.sin(t)) ** 2) / (2 * 1.4 ** 2))
+        return im
+
+    cube = np.empty((Sy, Sx, H, W), np.float32)
+    for iy in range(Sy):
+        for ix in range(Sx):
+            if ix < 3:
+                base = beam(150) + spots(15, 6, 45) + spots(24, 6, 28)   # crystalline
+            else:
+                base = beam(150) + 30 * np.exp(-((rr - 15) / 4.5) ** 2)   # amorphous halo
+            cube[iy, ix] = np.clip(base + 0.4 * rng.standard_normal((H, W)), 0, None)
+    dc = fds.from_array(cube, q_per_px=0.02)
+    pk = fds.cepstral_peakiness_image(dc, 1.4, 4.0, 0.02)
+    cryst = np.zeros((Sy, Sx), bool); cryst[:, :3] = True
+    assert pk[cryst].mean() > 1.3 * pk[~cryst].mean()

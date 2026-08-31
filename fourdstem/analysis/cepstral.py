@@ -186,6 +186,51 @@ def ewpc_mean(cube, offset=1.0, window=True, reducer="mean", n_jobs=1,
     return np.median(stack, 0) if reducer == "median" else stack.mean(0)
 
 
+def cepstral_peakiness_image(cube, r_in, r_out, q_per_px, offset=1.0, window=True,
+                             pctl=99.5, mask=None, n_jobs=1, progress=False):
+    """Per-pixel EWPC **peak prominence** over the quefrency band ``[r_in, r_out]`` Å.
+
+    A *direct* crystalline/amorphous discriminator matching the physics: a
+    crystalline pattern's EWPC has a few **sharp discrete peaks** (the lattice in
+    real space), while an amorphous pattern's EWPC is a **diffuse blob**. For each
+    probe position this computes the strongest cepstral peak in the band relative
+    to its local background,
+
+        peakiness = (percentile(C, ``pctl``) - median(C)) / MAD(C),
+
+    over the band pixels ``C`` — high when a sharp discrete peak stands above a
+    flat background (crystalline), low for a smooth diffuse cepstrum (amorphous).
+    Complements :func:`fluctuation_image` (normalized variance): the percentile /
+    MAD form keys directly on *discrete peakiness* and is more robust to the broad
+    amorphous speckle that muddies a plain variance. Returns a scan-shaped map.
+    """
+    from ..utils.parallel import parallel_map
+
+    flat = cube._flat_patterns() if hasattr(cube, "_flat_patterns") else \
+        np.asarray(cube).reshape(-1, *np.asarray(cube).shape[-2:])
+    dp = flat.shape[1:]
+    ann = _annulus_mask(dp, q_per_px, r_in, r_out)
+    if mask is not None:
+        ann = ann & np.asarray(mask, bool)
+    if ann.sum() < 5:
+        raise ValueError(
+            f"annulus [{r_in},{r_out}] Å selects {int(ann.sum())} cepstral pixels; "
+            f"widen the band or check q_per_px (dr="
+            f"{quefrency_per_px(dp[0], q_per_px):.4g} Å/px).")
+
+    def one(i):
+        cep = ewpc_pattern(flat[i], offset=offset, subtract_mean=True, window=window)
+        v = cep[ann]
+        med = float(np.median(v))
+        mad = 1.4826 * float(np.median(np.abs(v - med))) + 1e-12
+        return float((np.percentile(v, pctl) - med) / mad)
+
+    vals = np.asarray(parallel_map(one, range(flat.shape[0]), n_jobs=n_jobs,
+                                   progress=progress, desc="EWPC peakiness"), float)
+    scan = cube.scan_shape if hasattr(cube, "scan_shape") else None
+    return vals.reshape(scan) if scan and len(scan) == 2 else vals
+
+
 def ewpc_profiles(cube, q_per_px, n_bins=None, r_min=0.3, offset=1.0,
                   window=True, n_jobs=1, progress=False):
     """Per-position cepstral radial profiles -> ``(profiles, r_A)``.
