@@ -34,7 +34,7 @@ __all__ = [
 ]
 
 
-def ewpc_pattern(pattern, offset=1.0, subtract_mean=True, window=True):
+def ewpc_pattern(pattern, offset=1.0, subtract_mean=True, window=True, pad=None):
     """Exit-wave power cepstrum of one diffraction pattern (fftshifted, r=0 center).
 
     ``EWPC = |F^{-1}{ log(I + offset) }|``. ``offset`` keeps the log finite over
@@ -42,6 +42,13 @@ def ewpc_pattern(pattern, offset=1.0, subtract_mean=True, window=True):
     suppress the cross-shaped artifact from the pattern edges. ``subtract_mean``
     removes the mean of log I so the r=0 (DC) spike doesn't dominate — it only
     affects the central pixel, never the analysis band.
+
+    ``pad`` (int) zero-pads the windowed log-pattern to ``pad × pad`` before the
+    inverse transform, interpolating the cepstrum to a finer quefrency step
+    ``dr = 1/(pad · q_per_px)`` (the paper pads to 1024). Needed when the raw
+    detector is small enough that ``dr`` is coarser than the analysis band width.
+    The returned pattern is then ``pad × pad``; pass the same ``pad`` as ``n`` to
+    :func:`quefrency_per_px`.
     """
     p = np.asarray(pattern, float)
     logI = np.log(np.maximum(p, 0.0) + offset)
@@ -51,6 +58,15 @@ def ewpc_pattern(pattern, offset=1.0, subtract_mean=True, window=True):
         h0 = np.hanning(logI.shape[0])
         h1 = np.hanning(logI.shape[1])
         logI = logI * np.outer(h0, h1)
+    if pad:
+        pad = int(pad)
+        if pad < max(logI.shape):
+            raise ValueError(f"pad={pad} smaller than pattern {logI.shape}")
+        buf = np.zeros((pad, pad), float)
+        y0 = (pad - logI.shape[0]) // 2
+        x0 = (pad - logI.shape[1]) // 2
+        buf[y0:y0 + logI.shape[0], x0:x0 + logI.shape[1]] = logI
+        logI = buf
     cep = np.fft.fftshift(np.fft.ifft2(logI))
     return np.abs(cep)
 
@@ -99,32 +115,36 @@ def _annulus_mask(shape, q_per_px, r_in, r_out):
 
 
 def fluctuation_image(cube, r_in, r_out, q_per_px, offset=1.0, window=True,
-                      mask=None, n_jobs=1, progress=False):
+                      mask=None, pad=None, n_jobs=1, progress=False):
     """FC-STEM fluctuation image ``F(Rp)`` over the quefrency band ``[r_in, r_out]`` Å.
 
     For each probe position, computes the EWPC and the normalized variance of the
     cepstral values whose quefrency radius lies in the band (paper Eq. 3):
     ``F = <Cp^2>/<Cp>^2 - 1``. Bright = large fluctuation (more ordered speckle in
     that distance range). Returns a scan-shaped map. ``mask`` optionally restricts
-    the annulus further (bool, detector-shaped). Memory-light (one cepstrum at a
-    time); ``n_jobs`` fans positions across cores.
+    the annulus further (bool, cepstrum-shaped). ``pad`` zero-pads each pattern to
+    ``pad × pad`` before the EWPC so the quefrency step is fine enough to resolve a
+    narrow band (see :func:`ewpc_pattern`). Memory-light (one cepstrum at a time);
+    ``n_jobs`` fans positions across cores.
     """
     from ..utils.parallel import parallel_map
 
     flat = cube._flat_patterns() if hasattr(cube, "_flat_patterns") else \
         np.asarray(cube).reshape(-1, *np.asarray(cube).shape[-2:])
     dp = flat.shape[1:]
-    ann = _annulus_mask(dp, q_per_px, r_in, r_out)
+    cshape = (int(pad), int(pad)) if pad else dp
+    ann = _annulus_mask(cshape, q_per_px, r_in, r_out)
     if mask is not None:
         ann = ann & np.asarray(mask, bool)
     if ann.sum() < 3:
         raise ValueError(
             f"annulus [{r_in},{r_out}] Å selects {int(ann.sum())} cepstral pixels; "
-            "widen the band or check q_per_px (dr="
-            f"{quefrency_per_px(dp[0], q_per_px):.4g} Å/px).")
+            "widen the band, or pass pad= to refine dr (currently "
+            f"{quefrency_per_px(cshape[0], q_per_px):.4g} Å/px).")
 
     def one(i):
-        cep = ewpc_pattern(flat[i], offset=offset, subtract_mean=True, window=window)
+        cep = ewpc_pattern(flat[i], offset=offset, subtract_mean=True,
+                           window=window, pad=pad)
         v = cep[ann]
         m = v.mean()
         return float((v * v).mean() / (m * m) - 1.0) if m > 0 else 0.0
@@ -137,27 +157,30 @@ def fluctuation_image(cube, r_in, r_out, q_per_px, offset=1.0, window=True,
 
 
 def fluctuation_multiband(cube, bands, q_per_px, offset=1.0, window=True,
-                          n_jobs=1, progress=False):
+                          pad=None, n_jobs=1, progress=False):
     """FC-STEM fluctuation maps for several quefrency bands at once.
 
     ``bands`` is a list of ``(r_in, r_out)`` in Å. Computes the EWPC once per
     probe position and evaluates the normalized variance (Eq. 3) for every band —
-    far cheaper than calling :func:`fluctuation_image` once per band. Returns a
-    list of scan-shaped maps, one per band.
+    far cheaper than calling :func:`fluctuation_image` once per band. ``pad``
+    zero-pads each pattern to ``pad × pad`` to refine the quefrency step (see
+    :func:`ewpc_pattern`). Returns a list of scan-shaped maps, one per band.
     """
     from ..utils.parallel import parallel_map
 
     flat = cube._flat_patterns() if hasattr(cube, "_flat_patterns") else \
         np.asarray(cube).reshape(-1, *np.asarray(cube).shape[-2:])
     dp = flat.shape[1:]
-    masks = [_annulus_mask(dp, q_per_px, ri, ro) for ri, ro in bands]
+    cshape = (int(pad), int(pad)) if pad else dp
+    masks = [_annulus_mask(cshape, q_per_px, ri, ro) for ri, ro in bands]
     for (ri, ro), ann in zip(bands, masks):
         if ann.sum() < 3:
-            raise ValueError(f"band [{ri},{ro}] Å selects {int(ann.sum())} pixels "
-                             f"(dr={quefrency_per_px(dp[0], q_per_px):.4g} Å/px)")
+            raise ValueError(f"band [{ri},{ro}] Å selects {int(ann.sum())} pixels; "
+                             f"pass pad= to refine dr (currently "
+                             f"{quefrency_per_px(cshape[0], q_per_px):.4g} Å/px)")
 
     def one(i):
-        cep = ewpc_pattern(flat[i], offset=offset, window=window)
+        cep = ewpc_pattern(flat[i], offset=offset, window=window, pad=pad)
         out = []
         for ann in masks:
             v = cep[ann]; m = v.mean()
@@ -173,7 +196,7 @@ def fluctuation_multiband(cube, bands, q_per_px, offset=1.0, window=True,
 
 def fluctuation_profile(cube, q_per_px, r_min, r_max, width=0.2, step=None,
                         mask=None, offset=1.0, window=True, reducer="mean",
-                        n_jobs=1, progress=False):
+                        pad=None, n_jobs=1, progress=False):
     """FC-STEM fluctuation profile ``F(r)`` vs quefrency (paper Fig. 8).
 
     Sweeps a narrow quefrency window of fixed ``width`` Å (the paper uses
@@ -198,7 +221,7 @@ def fluctuation_profile(cube, q_per_px, r_min, r_max, width=0.2, step=None,
         raise ValueError(f"[{r_min},{r_max}] Å too narrow for window width {width} Å")
     bands = [(float(c - width / 2.0), float(c + width / 2.0)) for c in centers]
     maps = fluctuation_multiband(cube, bands, q_per_px, offset=offset,
-                                 window=window, n_jobs=n_jobs, progress=progress)
+                                 window=window, pad=pad, n_jobs=n_jobs, progress=progress)
     sm = None if mask is None else np.asarray(mask, bool)
 
     pctl = None

@@ -1234,6 +1234,27 @@ def test_fluctuation_profile_sweeps_quefrency():
                                 width=0.2, reducer=150.0, n_jobs=1)
 
 
+def test_ewpc_pad_refines_quefrency_and_enables_narrow_band():
+    # small detector -> coarse dr; a narrow band selects too few cepstral pixels,
+    # zero-padding refines dr so the same band resolves (paper pads to 1024).
+    from tests.synthetic import ring_pattern
+    N, qpp = 40, 0.06                                   # dr = 1/(40*0.06) = 0.417 A/px
+    pat = ring_pattern((N, N), rings=((9, 3, 1.0),), central_beam=4.0) + 2
+    raw = fds.ewpc_pattern(pat)
+    pad = 256
+    pce = fds.ewpc_pattern(pat, pad=pad)
+    assert raw.shape == (N, N) and pce.shape == (pad, pad)
+    assert fds.quefrency_per_px(pad, qpp) < fds.quefrency_per_px(N, qpp)
+    cube = np.stack([[pat + 0.1 * i + 0.05 * j for j in range(4)] for i in range(3)])
+    dc = fds.from_array(cube, q_per_px=qpp)
+    # a 0.2 A window at ~1 A is finer than one raw cepstral pixel -> would select 0;
+    # padding makes it resolvable
+    maps = fds.fluctuation_multiband(dc, [(0.9, 1.1)], qpp, pad=pad, n_jobs=1)
+    assert maps[0].shape == (3, 4) and np.isfinite(maps[0]).all()
+    with pytest.raises(ValueError):
+        fds.ewpc_pattern(pat, pad=8)                    # pad smaller than pattern
+
+
 def test_ewpc_profiles_shape():
     from tests.synthetic import ring_pattern
     N = 64
