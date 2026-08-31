@@ -30,7 +30,7 @@ import numpy as np
 
 __all__ = [
     "ewpc_pattern", "quefrency_per_px", "cepstral_radial_profile",
-    "fluctuation_image", "fluctuation_multiband", "fluctuation_profile", "cepstral_peakiness_image", "cepstral_discreteness_image", "cepstral_lattice_gvectors", "spot_lattice", "ewpc_mean", "ewpc_profiles",
+    "fluctuation_image", "fluctuation_multiband", "fluctuation_profile", "cepstral_peakiness_image", "cepstral_discreteness_image", "cepstral_lattice_gvectors", "spot_lattice", "cepstral_periodicity", "ewpc_mean", "ewpc_profiles",
 ]
 
 
@@ -436,6 +436,88 @@ def spot_lattice(spots, center, q_per_px, weights=None, min_angle=15.0,
                      for k in range(-hk_max, hk_max + 1)
                      if not (h == 0 and k == 0)])
     return {"g1": g1, "g2": g2, "lattice_frac": frac, "gvectors": gv, "grid_gs": grid}
+
+
+def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
+                         highpass="auto", n_orders=3, bg_win=9, sep=5, first_min=4.0):
+    """Translational-periodicity test — the defining crystallinity property.
+
+    A crystal has long-range translational order: its cepstral (EWPC) shows peaks
+    not only at the lattice vector ``a`` but at ``2a, 3a, …`` — the vector *repeats*.
+    An amorphous phase has only short-range order: its cepstral has a first shell
+    (the nearest-neighbour halo) but **nothing at 2a** — the vector does not repeat.
+    So, crucially, this cannot be faked by an amorphous ring the way |q|- or
+    lattice-*matching* can: matching only checks the first application (which both
+    satisfy); repetition checks the second, which only a crystal survives.
+
+    Given the reciprocal basis ``g1`` (and optional ``g2``) from the NBD diffraction
+    spots, the real-space lattice vectors are ``a_i`` with ``a_i·g_j = δ_ij`` (for a
+    single vector, ``a = g/|g|²``). The cepstral is background-subtracted; at each
+    predicted point ``n·a_i`` we measure the local-peak significance
+    ``(resid − median)/MAD`` (checking *predicted* positions sidesteps blind peak
+    detection). Returns ``{score, orders, a_vectors, dr}`` where ``orders[i]`` lists
+    the peak significance ``(peak − median)/MAD`` at ``n·a_i`` for ``n = 1…n_orders``
+    (each the best peak within a small window, tolerating sub-pixel / lattice
+    distortion). A vector *repeats* only if it applies once (1st-order significance
+    ≥ ``first_min``) AND again at a higher order (2nd OR 3rd ≥ ``first_min``);
+    ``score`` is the min higher-order significance over the basis vectors that repeat
+    (0 if any fails). Crystal ⇒ score ≫ 0; amorphous ⇒ score ≈ 0.
+    """
+    from scipy.ndimage import median_filter, maximum_filter
+    hp = highpass
+    if hp == "auto":
+        hp = max(4, int(np.asarray(pattern).shape[0]) // 32)
+    cep = ewpc_pattern(pattern, pad=pad, highpass=hp)
+    n = cep.shape[0]
+    cc = n // 2
+    dr = quefrency_per_px(n, q_per_px)
+    resid = cep - median_filter(cep, size=int(bg_win))
+    mxf = maximum_filter(resid, size=int(sep))
+    rr = _radius_px(cep.shape)
+    band = rr >= (1.0 / dr if dr > 0 else 3.0)
+    med = float(np.median(resid[band]))
+    mad = 1.4826 * float(np.median(np.abs(resid[band] - med))) + 1e-12
+
+    g1 = np.asarray(g1, float)
+    if g2 is not None:
+        G = np.array([g1, np.asarray(g2, float)])
+        A = np.linalg.inv(G).T                     # a_i · g_j = δ_ij (direct lattice)
+        avs = [A[0], A[1]]
+    else:
+        avs = [g1 / (g1 @ g1)]                       # 1-D: |a| = 1/|g| along g
+
+    win = max(1, int(round(0.15 / dr)))                # sub-pixel / distortion tolerance (~0.15 Å)
+
+    def sig_at(a, ns):
+        # a crystal's n*a lands on an ISOLATED lattice peak; an amorphous ripple slope
+        # does not. Look for a local-maximum pixel within a small absolute window of
+        # the predicted point (tolerates sub-pixel offset without reaching far ripples).
+        px = cc + ns * a[0] / dr
+        py = cc + ns * a[1] / dr
+        ix, iy = int(round(px)), int(round(py))
+        if not (win + sep <= ix < n - win - sep and win + sep <= iy < n - win - sep):
+            return None
+        sub = resid[iy - win:iy + win + 1, ix - win:ix + win + 1]
+        ismax = sub >= mxf[iy - win:iy + win + 1, ix - win:ix + win + 1] - 1e-12
+        if ismax.any():
+            return float((sub[ismax].max() - med) / mad), True    # isolated peak found
+        return float((resid[iy, ix] - med) / mad), False          # no local max nearby
+
+    def is_peak(o):
+        return o is not None and o[0] >= first_min and o[1]
+
+    orders = {}
+    rep = []                                            # per-vector higher-order strength
+    for i, a in enumerate(avs):
+        sigs = [sig_at(a, ns) for ns in range(1, int(n_orders) + 1)]
+        orders[i] = sigs
+        if not is_peak(sigs[0]):                        # must apply once (isolated peak)
+            rep.append(0.0)
+            continue
+        higher = [o[0] for o in sigs[1:] if is_peak(o)]  # repeats to 2nd OR 3rd (isolated peak)
+        rep.append(max(higher) if higher else 0.0)
+    score = float(min(rep)) if rep else 0.0             # every basis vector must repeat
+    return {"score": score, "orders": orders, "a_vectors": avs, "dr": dr}
 
 
 def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,

@@ -1335,6 +1335,44 @@ def test_cepstral_lattice_subpixel_and_noise():
     assert len(gs) > 0 and info["lattice_frac"] >= 0.6
 
 
+def test_cepstral_periodicity_repeats_for_crystal_only():
+    # translational periodicity: the lattice vector repeats (2a, 3a peaks) for a
+    # crystal but not for an amorphous ring — the defining crystallinity test
+    N, QPP = 128, 0.02
+    c = N // 2
+    yy, xx = np.mgrid[0:N, 0:N]
+    r = np.hypot(xx - c, yy - c)
+    beam = 6000 * np.exp(-(r / 4) ** 2)
+
+    def grain(amp, seed):
+        rng = np.random.default_rng(seed)
+        im = beam.copy()
+        for h in range(-2, 3):
+            for k in range(-2, 3):
+                if h == 0 and k == 0:
+                    continue
+                x, y = c + h * 24, c + k * 24
+                if 0 <= x < N and 0 <= y < N:
+                    im += amp * np.exp(-(((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.4 ** 2)))
+        return np.clip(im + 5 + 3 * rng.standard_normal((N, N)), 0, None)
+
+    def score(pat):
+        sp = fds.detect_spots(pat, (c, c), QPP, q_beam=0.2, q_max=1.2, n_mad=6.0)
+        wt = [pat[int(s[1]), int(s[0])] for s in sp]
+        lat = fds.spot_lattice(sp, (c, c), QPP, weights=wt, lattice_tol=0.06)
+        if lat is None:
+            return -1.0
+        return fds.cepstral_periodicity(pat, lat["g1"], lat["g2"], QPP)["score"]
+
+    assert score(grain(90, 1)) >= 4.0                    # strong crystal repeats
+    assert score(grain(35, 5)) >= 4.0                    # weaker crystal still repeats
+    for seed in (2, 7, 11, 15):                          # amorphous rings never repeat
+        rng = np.random.default_rng(seed)
+        ring = np.clip(beam + 130 * np.exp(-((r - 24) / 2.0) ** 2)
+                       + 5 + 3 * rng.standard_normal((N, N)), 0, None)
+        assert score(ring) < 4.0
+
+
 def test_azimuthal_discreteness_spots_vs_ring():
     # discrete Bragg spots vs a continuous ring at the SAME radius: |q| can't tell
     # them apart, but the angular discreteness does (crystalline high, amorphous low)
