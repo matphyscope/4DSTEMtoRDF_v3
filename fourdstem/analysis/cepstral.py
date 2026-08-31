@@ -304,76 +304,138 @@ def _lagrange_reduce(v1, v2):
     return v1, v2
 
 
+def _ewpc_peaks(cep, dr, r_min, r_max, nsig=4.0, min_sep_px=2, bg_win_px=None,
+                min_prom=0.10, max_peaks=60, subpixel=True):
+    """Detect discrete peaks in an EWPC pattern within the quefrency band.
+
+    The EWPC decays steeply from the centre, so peaks are found on a
+    *background-subtracted* map: ``resid = cep - median_filter(cep, bg_win)``.
+    A peak must (i) be a local maximum over a ``±min_sep_px`` neighbourhood,
+    (ii) exceed ``median + nsig·MAD`` of the residual in the band (robust
+    significance, not a fraction of the global max), and (iii) exceed
+    ``min_prom`` of the strongest residual peak. Positions are refined to
+    sub-pixel by a parabolic fit in x and y — essential for accurate lattice
+    vectors. Returns ``(vecs, strengths)`` with ``vecs`` the (dx, dy) offsets
+    from the centre in Å, sorted by increasing length.
+    """
+    from scipy.ndimage import maximum_filter, median_filter
+
+    n0, n1 = cep.shape
+    if bg_win_px is None:
+        bg_win_px = max(5, int(round(0.5 / dr)))
+    if bg_win_px % 2 == 0:
+        bg_win_px += 1
+    resid = cep - median_filter(cep, size=int(bg_win_px))
+    r_ang = _radius_px(cep.shape) * dr
+    band = (r_ang >= r_min) & (r_ang <= r_max)
+    vb = resid[band]
+    med = float(np.median(vb))
+    mad = 1.4826 * float(np.median(np.abs(vb - med))) + 1e-12
+    thr = med + float(nsig) * mad
+    sep = max(1, int(min_sep_px))
+    loc = band & (resid == maximum_filter(resid, size=2 * sep + 1)) & (resid > thr)
+    ys, xs = np.nonzero(loc)
+    if ys.size == 0:
+        return np.zeros((0, 2)), np.zeros(0)
+    st = resid[ys, xs]
+    keep = st >= float(min_prom) * st.max()
+    ys, xs, st = ys[keep], xs[keep], st[keep]
+    order = np.argsort(-st)[:int(max_peaks)]
+    ys, xs, st = ys[order], xs[order], st[order]
+    cy, cx = n0 // 2, n1 // 2
+    fy = ys.astype(float); fx = xs.astype(float)
+    if subpixel:
+        for i in range(len(ys)):
+            y, x = int(ys[i]), int(xs[i])
+            if 0 < y < n0 - 1:
+                a, b, c = resid[y - 1, x], resid[y, x], resid[y + 1, x]
+                d = a - 2 * b + c
+                if d < 0:
+                    fy[i] = y + 0.5 * (a - c) / d
+            if 0 < x < n1 - 1:
+                a, b, c = resid[y, x - 1], resid[y, x], resid[y, x + 1]
+                d = a - 2 * b + c
+                if d < 0:
+                    fx[i] = x + 0.5 * (a - c) / d
+    vecs = np.column_stack([(fx - cx) * dr, (fy - cy) * dr])
+    norms = np.hypot(vecs[:, 0], vecs[:, 1])
+    o = np.argsort(norms)
+    return vecs[o], st[o]
+
+
 def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,
-                              offset=1.0, window=True, min_prom=0.15, min_angle=15.0,
-                              hk_max=2, max_peaks=40, min_lattice_frac=0.5, lattice_tol=0.22):
+                              offset=1.0, window=True, min_prom=0.10, min_angle=15.0,
+                              hk_max=2, max_peaks=60, min_lattice_frac=0.5,
+                              lattice_tol=0.18, peak_nsig=4.0, min_sep_px=2,
+                              bg_frac=0.5, n_basis=8):
     """Extract the 2-D EWPC peak lattice and return equivalent reciprocal g-vectors.
 
     The exit-wave power cepstrum of a crystalline zone-axis pattern peaks at the
-    projected *real-space* lattice vectors. This finds the two shortest
-    non-collinear cepstral peaks (Lagrange-reduced to a primitive basis ``v1, v2``
-    in Å), forms the 2-D reciprocal basis ``g1, g2`` (1/Å, ``g_i · v_j = δ_ij`` so
-    ``|g|=1/d``), and generates ``g_hk = h·g1 + k·g2`` (``|h|,|k| ≤ hk_max``) — a
-    clean reflection set to feed :func:`index_pattern` for geometric zone-axis
-    indexing. Peaks below ``min_prom`` of the max are dropped; an amorphous pattern
-    (cepstral *rings*, no discrete 2-D lattice) yields no non-collinear basis and
-    returns an empty ``gs``. Returns ``(gs, info)`` with ``info`` holding
-    ``v1, v2, g1, g2, dr, n_peaks`` (and ``reason`` when empty).
+    projected *real-space* lattice vectors. Peak detection (the make-or-break
+    step) is done by :func:`_ewpc_peaks`: background-subtracted, robust
+    ``median + peak_nsig·MAD`` significance, ``min_sep_px`` separation and
+    sub-pixel parabolic refinement (``bg_frac`` sets the background window in Å).
+    The primitive basis ``v1, v2`` (Å) is then chosen by searching all pairs of
+    the ``n_basis`` shortest peaks (each Lagrange-reduced) and keeping the one
+    whose lattice explains the most peaks — so a single spurious short peak cannot
+    wreck the basis. ``lattice_frac`` is that best fraction: peaks whose fractional
+    coordinates ``[h,k] = p·V⁻¹`` land within ``lattice_tol`` of integers. A
+    crystal scores ≈1; an amorphous cepstral *ring* scores low and, below
+    ``min_lattice_frac``, returns an empty ``gs``. From ``v1, v2`` the 2-D
+    reciprocal basis ``g1, g2`` (1/Å, ``g_i · v_j = δ_ij`` so ``|g|=1/d``) gives the
+    reflection set ``g_hk = h·g1 + k·g2`` (``|h|,|k| ≤ hk_max``) for
+    :func:`index_pattern`. Returns ``(gs, info)`` with ``info`` holding
+    ``v1, v2, g1, g2, lattice_frac, peaks, peak_strength, dr, n_peaks`` (and
+    ``reason`` when empty). ``peaks`` are the detected (dx, dy) offsets in Å — plot
+    them on the EWPC to check detection quality.
     """
-    from scipy.ndimage import maximum_filter
-
     cep = ewpc_pattern(pattern, offset=offset, window=window, pad=pad)
     n0, n1 = cep.shape
     dr = quefrency_per_px(n0, q_per_px)
-    cy, cx = n0 // 2, n1 // 2
-    r_ang = _radius_px(cep.shape) * dr
-    band = (r_ang >= r_min) & (r_ang <= r_max)
-    loc = (cep == maximum_filter(cep, size=3)) & band
+    bg_win = max(5, int(round(float(bg_frac) / dr)))
+    vecs, st = _ewpc_peaks(cep, dr, r_min, r_max, nsig=peak_nsig,
+                           min_sep_px=min_sep_px, bg_win_px=bg_win,
+                           min_prom=min_prom, max_peaks=max_peaks)
     empty = np.zeros((0, 2))
-    if not loc.any():
-        return empty, {"reason": "no cepstral peaks in band", "dr": dr, "n_peaks": 0}
-    ys, xs = np.nonzero(loc)
-    vals = cep[ys, xs]
-    keep = vals >= vals.max() * float(min_prom)
-    ys, xs, vals = ys[keep], xs[keep], vals[keep]
-    order = np.argsort(-vals)[:max_peaks]
-    ys, xs = ys[order], xs[order]
-    vecs = np.column_stack([(xs - cx) * dr, (ys - cy) * dr])       # (dx, dy) Å
-    norms = np.hypot(vecs[:, 0], vecs[:, 1])
-    o = np.argsort(norms)
-    vecs = vecs[o]
+    base_info = {"dr": dr, "n_peaks": int(len(vecs)),
+                 "peaks": vecs, "peak_strength": st}
     if len(vecs) < 2:
-        return empty, {"reason": "fewer than 2 peaks", "dr": dr, "n_peaks": len(vecs)}
-    v1 = vecs[0]
-    v2 = None
-    for v in vecs[1:]:
-        c = float(v1 @ v) / (np.linalg.norm(v1) * np.linalg.norm(v) + 1e-12)
-        ang = np.degrees(np.arccos(np.clip(abs(c), -1.0, 1.0)))    # 0..90 (fold)
-        if ang >= min_angle:
-            v2 = v
-            break
-    if v2 is None:
-        return empty, {"reason": "no non-collinear peak", "dr": dr, "n_peaks": len(vecs)}
-    v1, v2 = _lagrange_reduce(v1, v2)
-    V = np.array([v1, v2])
-    if abs(np.linalg.det(V)) < 1e-9:
-        return empty, {"reason": "degenerate basis", "dr": dr, "n_peaks": len(vecs)}
-    # lattice-consistency gate: a real crystal lattice has most detected peaks at
-    # near-integer (h,k) of the basis; amorphous cepstral rings do not.
-    hk = vecs @ np.linalg.inv(V)                                   # fractional coords
-    resid = np.abs(hk - np.round(hk)).max(axis=1)
-    frac = float((resid <= lattice_tol).mean())
+        return empty, {"reason": "fewer than 2 peaks", **base_info}
+
+    # Search the basis over the shortest peaks and pick the (v1, v2) whose lattice
+    # explains the most detected peaks — one spurious short peak can't wreck it.
+    inv = np.linalg.inv
+    cand = vecs[:min(len(vecs), int(n_basis))]
+    best = None                                                   # (frac, v1, v2)
+    for a in range(len(cand)):
+        for b in range(a + 1, len(cand)):
+            v1c, v2c = cand[a], cand[b]
+            cth = float(v1c @ v2c) / (np.linalg.norm(v1c) * np.linalg.norm(v2c) + 1e-12)
+            if np.degrees(np.arccos(np.clip(abs(cth), -1.0, 1.0))) < min_angle:
+                continue
+            r1, r2 = _lagrange_reduce(v1c, v2c)
+            V = np.array([r1, r2])
+            if abs(np.linalg.det(V)) < 1e-9:
+                continue
+            hk = vecs @ inv(V)
+            res = np.abs(hk - np.round(hk)).max(axis=1)
+            frac = float((res <= lattice_tol).mean())
+            if best is None or frac > best[0]:
+                best = (frac, r1, r2)
+    if best is None:
+        return empty, {"reason": "no non-collinear basis", **base_info}
+    frac, v1, v2 = best
     if frac < float(min_lattice_frac):
         return empty, {"reason": f"peaks not lattice-consistent (frac={frac:.2f})",
-                       "dr": dr, "n_peaks": len(vecs), "lattice_frac": frac}
-    G = np.linalg.inv(V).T
+                       "lattice_frac": frac, **base_info}
+    G = inv(np.array([v1, v2])).T
     g1, g2 = G[0], G[1]
     gs = [h * g1 + k * g2
           for h in range(-hk_max, hk_max + 1)
           for k in range(-hk_max, hk_max + 1)
           if not (h == 0 and k == 0)]
-    info = {"v1": v1, "v2": v2, "g1": g1, "g2": g2, "dr": dr,
-            "n_peaks": len(vecs), "lattice_frac": frac}
+    info = {"v1": v1, "v2": v2, "g1": g1, "g2": g2, "lattice_frac": frac,
+            "peaks": vecs, "peak_strength": st, **base_info}
     return np.array(gs), info
 
 

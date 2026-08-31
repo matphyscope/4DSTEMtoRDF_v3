@@ -1316,6 +1316,25 @@ def test_cepstral_lattice_gvectors_crystal_vs_amorphous():
     assert len(ga) == 0 and "lattice" in ia["reason"]
 
 
+def test_cepstral_lattice_subpixel_and_noise():
+    # sub-pixel: fractional-pixel spacings recovered to <1% via parabolic refine
+    N, qpp, pad = 128, 0.02, 512
+    for g_px in (17.3, 21.7):
+        pat = _square_spot_lattice(N, g_px=g_px, amp=12, sig=1.1) + 1.0
+        gs, info = fds.cepstral_lattice_gvectors(pat, qpp, r_min=1.0, r_max=25.0,
+                                                 pad=pad)
+        assert len(gs) > 0
+        expect = 1.0 / (g_px * qpp)                              # cepstral period Å
+        got = min(np.linalg.norm(info["v1"]), np.linalg.norm(info["v2"]))
+        assert abs(got - expect) / expect < 0.01
+        assert "peaks" in info and len(info["peaks"]) >= 4
+    # weak lattice under strong noise is still found
+    rng = np.random.default_rng(0)
+    pat = _square_spot_lattice(N, g_px=18, amp=5) + 2.0 + 1.5 * rng.standard_normal((N, N))
+    gs, info = fds.cepstral_lattice_gvectors(pat, qpp, r_min=1.0, r_max=25.0, pad=pad)
+    assert len(gs) > 0 and info["lattice_frac"] >= 0.6
+
+
 def test_cepstral_discreteness_image_crystal_vs_amorphous():
     from tests.synthetic import ring_pattern
     N, qpp, pad = 128, 0.02, 512
