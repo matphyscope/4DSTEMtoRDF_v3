@@ -34,7 +34,8 @@ __all__ = [
 ]
 
 
-def ewpc_pattern(pattern, offset=1.0, subtract_mean=True, window=True, pad=None):
+def ewpc_pattern(pattern, offset=1.0, subtract_mean=True, window=True, pad=None,
+                 highpass=None):
     """Exit-wave power cepstrum of one diffraction pattern (fftshifted, r=0 center).
 
     ``EWPC = |F^{-1}{ log(I + offset) }|``. ``offset`` keeps the log finite over
@@ -49,11 +50,21 @@ def ewpc_pattern(pattern, offset=1.0, subtract_mean=True, window=True, pad=None)
     detector is small enough that ``dr`` is coarser than the analysis band width.
     The returned pattern is then ``pad × pad``; pass the same ``pad`` as ``n`` to
     :func:`quefrency_per_px`.
+
+    ``highpass`` (Gaussian sigma in detector px) subtracts a blurred copy of
+    ``log I`` first, removing the smooth central-beam + halo envelope. Without it
+    that envelope dominates the cepstrum as a big central blob whose flank ripples
+    swamp the true lattice peaks; with it the discrete lattice peaks stand out.
+    Peak positions (hence lattice vectors) are unchanged. Used by
+    :func:`cepstral_lattice_gvectors`.
     """
     p = np.asarray(pattern, float)
     logI = np.log(np.maximum(p, 0.0) + offset)
     if subtract_mean:
         logI = logI - logI.mean()
+    if highpass:
+        from scipy.ndimage import gaussian_filter
+        logI = logI - gaussian_filter(logI, float(highpass))
     if window:
         h0 = np.hanning(logI.shape[0])
         h1 = np.hanning(logI.shape[1])
@@ -366,8 +377,8 @@ def _ewpc_peaks(cep, dr, r_min, r_max, nsig=4.0, min_sep_px=2, bg_win_px=None,
 def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,
                               offset=1.0, window=True, min_prom=0.10, min_angle=15.0,
                               hk_max=2, max_peaks=60, min_lattice_frac=0.5,
-                              lattice_tol=0.18, peak_nsig=4.0, min_sep_px=2,
-                              bg_frac=0.5, n_basis=8):
+                              lattice_tol=0.18, peak_nsig=8.0, min_sep_px=2,
+                              bg_frac=0.5, n_basis=8, highpass="auto"):
     """Extract the 2-D EWPC peak lattice and return equivalent reciprocal g-vectors.
 
     The exit-wave power cepstrum of a crystalline zone-axis pattern peaks at the
@@ -378,8 +389,11 @@ def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,
     The primitive basis ``v1, v2`` (Å) is then chosen by searching all pairs of
     the ``n_basis`` shortest peaks (each Lagrange-reduced) and keeping the one
     whose lattice explains the most peaks — so a single spurious short peak cannot
-    wreck the basis. ``lattice_frac`` is that best fraction: peaks whose fractional
-    coordinates ``[h,k] = p·V⁻¹`` land within ``lattice_tol`` of integers. A
+    wreck the basis. ``lattice_frac`` is that best fraction, **weighted by peak
+    strength**: the summed strength of peaks whose fractional coordinates
+    ``[h,k] = p·V⁻¹`` land within ``lattice_tol`` of integers, over the total. The
+    weighting matters because the residual central-beam blob leaves many *weak*
+    ripple peaks — unweighted they would swamp the few strong true-lattice peaks. A
     crystal scores ≈1; an amorphous cepstral *ring* scores low and, below
     ``min_lattice_frac``, returns an empty ``gs``. From ``v1, v2`` the 2-D
     reciprocal basis ``g1, g2`` (1/Å, ``g_i · v_j = δ_ij`` so ``|g|=1/d``) gives the
@@ -389,7 +403,10 @@ def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,
     ``reason`` when empty). ``peaks`` are the detected (dx, dy) offsets in Å — plot
     them on the EWPC to check detection quality.
     """
-    cep = ewpc_pattern(pattern, offset=offset, window=window, pad=pad)
+    hp = highpass
+    if hp == "auto":
+        hp = max(4, int(np.asarray(pattern).shape[0]) // 32)   # ~beam+halo width
+    cep = ewpc_pattern(pattern, offset=offset, window=window, pad=pad, highpass=hp)
     n0, n1 = cep.shape
     dr = quefrency_per_px(n0, q_per_px)
     bg_win = max(5, int(round(float(bg_frac) / dr)))
@@ -406,6 +423,7 @@ def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,
     # explains the most detected peaks — one spurious short peak can't wreck it.
     inv = np.linalg.inv
     cand = vecs[:min(len(vecs), int(n_basis))]
+    w = st / (st.sum() + 1e-12)                                   # peak-strength weights
     best = None                                                   # (frac, v1, v2)
     for a in range(len(cand)):
         for b in range(a + 1, len(cand)):
@@ -418,8 +436,9 @@ def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,
             if abs(np.linalg.det(V)) < 1e-9:
                 continue
             hk = vecs @ inv(V)
-            res = np.abs(hk - np.round(hk)).max(axis=1)
-            frac = float((res <= lattice_tol).mean())
+            fit = np.abs(hk - np.round(hk)).max(axis=1) <= lattice_tol
+            frac = float(w[fit].sum())                            # strength-weighted:
+            #   strong true-lattice peaks dominate; weak blob-ripple peaks can't dilute
             if best is None or frac > best[0]:
                 best = (frac, r1, r2)
     if best is None:

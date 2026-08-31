@@ -158,8 +158,8 @@ def detect_spots(max_pat, center, q_per_px, q_beam=0.15, q_max=1.15,
 
 
 def ring_azimuthal_spots(pattern, center, q_per_px, ring_q, dq=0.03, n_theta=360,
-                         max_spots=10, min_prom_frac=0.10, min_sep_deg=12.0,
-                         min_contrast=0.30):
+                         max_spots=10, min_prom_frac=0.06, min_sep_deg=12.0,
+                         min_nsig=4.0, min_contrast=0.0):
     """Spots on one diffraction ring, found by unwrapping the ring azimuthally.
 
     Polar-transforms ``pattern`` about ``center``, averages the intensity over the
@@ -167,11 +167,13 @@ def ring_azimuthal_spots(pattern, center, q_per_px, ring_q, dq=0.03, n_theta=360
     (the ring "unrolled" into a 1-D line), and returns its prominent angular peaks
     as spots — up to ``max_spots`` per ring, separated by at least ``min_sep_deg``,
     each with prominence ≥ ``min_prom_frac`` of the profile's peak-to-trough range
-    AND rising at least ``min_contrast`` above the ring's *median* level (so a
-    smooth, spot-free ring — whose only structure is interpolation ripple a few %
-    of the median — yields no spots). Wrap-around at 0/360° is handled. A real spot
-    is the crystalline excess sitting on the diffuse ring background, so the
-    contrast is taken relative to that background (the azimuthal median).
+    AND rising ``min_nsig`` robust MAD above the ring's *median* level. The
+    MAD threshold adapts to each ring's own noise, so a low-contrast-but-clearly-
+    discrete peak (a few % above the median but many σ above the noise) is kept,
+    while a smooth, spot-free ring (only interpolation ripple / noise) yields none —
+    unlike a fixed fractional-contrast cut, which misses real weak spots and can
+    admit noise. ``min_contrast`` (default 0, off) optionally also requires the peak
+    to exceed that fraction of the median. Wrap-around at 0/360° is handled.
     Returns ``(spots, theta_deg, profile)`` where
     ``spots`` is ``[(x, y, theta_rad, height), ...]`` and ``(theta_deg, profile)`` is
     the unrolled 1-D ring for plotting.
@@ -196,13 +198,16 @@ def ring_azimuthal_spots(pattern, center, q_per_px, ring_q, dq=0.03, n_theta=360
     # wrap-around: tile x3, detect in the middle copy
     n = prof.size
     med = float(np.median(prof))
-    thr = med + float(min_contrast) * max(med, 1e-12)             # absolute spot floor
+    mad = 1.4826 * float(np.median(np.abs(prof - med))) + 1e-12
+    thr = med + float(min_nsig) * mad                             # noise-adaptive floor
+    if min_contrast > 0:
+        thr = max(thr, med + float(min_contrast) * max(med, 1e-12))
     tiled = np.concatenate([prof, prof, prof])
     dist = max(1, int(round(min_sep_deg / 360.0 * n)))
     pk, props = find_peaks(tiled, prominence=min_prom_frac * rng, distance=dist)
     mid = [(int(p - n), float(props["prominences"][j]))
            for j, p in enumerate(pk)
-           if n <= p < 2 * n and prof[int(p - n)] >= thr]          # above ring median
+           if n <= p < 2 * n and prof[int(p - n)] >= thr]          # significant peak
     mid.sort(key=lambda t: -prof[t[0]])
     spots = []
     for idx, _prom in mid[:max_spots]:
