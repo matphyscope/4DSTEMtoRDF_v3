@@ -1255,6 +1255,34 @@ def test_ewpc_pad_refines_quefrency_and_enables_narrow_band():
         fds.ewpc_pattern(pat, pad=8)                    # pad smaller than pattern
 
 
+def test_ring_azimuthal_spots_recovers_positions():
+    # 6 spots on a ring, found by unwrapping the ring into a 1-D angular profile
+    N, qpp, R = 128, 0.02, 30
+    center = (64.0, 64.0)
+    img = np.ones((N, N)) * 2.0
+    yy, xx = np.mgrid[0:N, 0:N]
+    angs = np.deg2rad([10, 70, 140, 205, 260, 315])
+    truth = []
+    for a in angs:
+        x, y = center[0] + R * np.cos(a), center[1] + R * np.sin(a)
+        truth.append((x, y))
+        img += 20 * np.exp(-(((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.3 ** 2)))
+    r = np.hypot(xx - center[0], yy - center[1])
+    img += 3 * np.exp(-((r - R) / 2.0) ** 2)                  # faint full ring
+    spots, theta_deg, prof = fds.ring_azimuthal_spots(
+        img, center, qpp, ring_q=R * qpp, dq=0.03, max_spots=10, min_prom_frac=0.15)
+    assert theta_deg.size == prof.size
+    assert len(spots) == 6
+    det = np.array([(s[0], s[1]) for s in spots])
+    for tx, ty in truth:
+        assert np.hypot(det[:, 0] - tx, det[:, 1] - ty).min() < 3.0
+    # a featureless ring (no spots) yields none
+    flat = np.ones((N, N)) * 2.0 + 3 * np.exp(-((r - R) / 2.0) ** 2)
+    s2, _, _ = fds.ring_azimuthal_spots(flat, center, qpp, ring_q=R * qpp,
+                                        dq=0.03, min_prom_frac=0.3)
+    assert len(s2) == 0
+
+
 def _square_spot_lattice(N, g_px=18, amp=10.0, sig=1.2):
     img = np.zeros((N, N)); c = N // 2
     yy, xx = np.mgrid[0:N, 0:N]

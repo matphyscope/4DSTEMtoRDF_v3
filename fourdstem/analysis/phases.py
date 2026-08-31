@@ -157,6 +157,62 @@ def detect_spots(max_pat, center, q_per_px, q_beam=0.15, q_max=1.15,
             for x, y in zip(xs, ys)]
 
 
+def ring_azimuthal_spots(pattern, center, q_per_px, ring_q, dq=0.03, n_theta=360,
+                         max_spots=10, min_prom_frac=0.10, min_sep_deg=12.0,
+                         min_contrast=0.30):
+    """Spots on one diffraction ring, found by unwrapping the ring azimuthally.
+
+    Polar-transforms ``pattern`` about ``center``, averages the intensity over the
+    thin radial band ``ring_q ± dq`` (1/Å) to get an intensity-vs-angle profile
+    (the ring "unrolled" into a 1-D line), and returns its prominent angular peaks
+    as spots — up to ``max_spots`` per ring, separated by at least ``min_sep_deg``,
+    each with prominence ≥ ``min_prom_frac`` of the profile's peak-to-trough range
+    AND rising at least ``min_contrast`` above the ring's *median* level (so a
+    smooth, spot-free ring — whose only structure is interpolation ripple a few %
+    of the median — yields no spots). Wrap-around at 0/360° is handled. A real spot
+    is the crystalline excess sitting on the diffuse ring background, so the
+    contrast is taken relative to that background (the azimuthal median).
+    Returns ``(spots, theta_deg, profile)`` where
+    ``spots`` is ``[(x, y, theta_rad, height), ...]`` and ``(theta_deg, profile)`` is
+    the unrolled 1-D ring for plotting.
+    """
+    from scipy.signal import find_peaks
+    from ..preprocess.transform import polar_transform
+
+    center = _resolve_center(pattern, center)
+    rq_px = float(ring_q) / q_per_px
+    r_max = rq_px + max(3.0, 2.0 * dq / q_per_px)
+    polar, r_ax, th_ax = polar_transform(pattern, center, n_theta=int(n_theta),
+                                         r_max=r_max)
+    band = np.abs(r_ax - rq_px) <= (dq / q_per_px)
+    if not band.any():
+        band = np.abs(r_ax - rq_px) <= (r_ax[1] - r_ax[0]) * 1.5
+    prof = np.nanmean(np.where(np.isnan(polar[:, band]), np.nan, polar[:, band]), axis=1)
+    prof = np.nan_to_num(prof, nan=float(np.nanmin(prof)) if np.isfinite(prof).any() else 0.0)
+    theta_deg = np.degrees(th_ax)
+    rng = float(prof.max() - prof.min())
+    if rng <= 0:
+        return [], theta_deg, prof
+    # wrap-around: tile x3, detect in the middle copy
+    n = prof.size
+    med = float(np.median(prof))
+    thr = med + float(min_contrast) * max(med, 1e-12)             # absolute spot floor
+    tiled = np.concatenate([prof, prof, prof])
+    dist = max(1, int(round(min_sep_deg / 360.0 * n)))
+    pk, props = find_peaks(tiled, prominence=min_prom_frac * rng, distance=dist)
+    mid = [(int(p - n), float(props["prominences"][j]))
+           for j, p in enumerate(pk)
+           if n <= p < 2 * n and prof[int(p - n)] >= thr]          # above ring median
+    mid.sort(key=lambda t: -prof[t[0]])
+    spots = []
+    for idx, _prom in mid[:max_spots]:
+        th = th_ax[idx]
+        x = center[0] + rq_px * np.cos(th)
+        y = center[1] + rq_px * np.sin(th)
+        spots.append((float(x), float(y), float(th), float(prof[idx])))
+    return spots, theta_deg, prof
+
+
 def score_phases(rings_q, spots_q, candidates=None, tol=0.045, min_unique_spots=5,
                  q_confirm_min=0.28, rings=None):
     """Per-phase verdict from measured ring/spot positions.
