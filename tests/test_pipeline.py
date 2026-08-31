@@ -1335,6 +1335,35 @@ def test_cepstral_lattice_subpixel_and_noise():
     assert len(gs) > 0 and info["lattice_frac"] >= 0.6
 
 
+def test_spot_lattice_reciprocal_basis_from_nbd():
+    # NBD Bragg spots (strong central beam) -> reciprocal basis, no cepstral needed
+    N, QPP = 128, 0.02
+    c = N // 2
+    yy, xx = np.mgrid[0:N, 0:N]
+    r = np.hypot(xx - c, yy - c)
+    nbd = 6000 * np.exp(-(r / 4) ** 2) + 150 * np.exp(-((r - 24) / 6) ** 2)
+    g_px = 24
+    for h in range(-2, 3):
+        for k in range(-2, 3):
+            if h == 0 and k == 0:
+                continue
+            x, y = c + h * g_px, c + k * g_px
+            if 0 <= x < N and 0 <= y < N:
+                nbd = nbd + 90 * np.exp(-(((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.4 ** 2)))
+    nbd = np.clip(nbd + 5, 0, None)
+    sp = fds.detect_spots(nbd, (c, c), QPP, q_beam=0.2, q_max=1.2, n_mad=6.0)
+    assert len(sp) >= 8
+    wt = [nbd[int(s[1]), int(s[0])] for s in sp]
+    lat = fds.spot_lattice(sp, (c, c), QPP, weights=wt)
+    assert lat is not None
+    # |g| of the basis == the spot spacing q, to 5%
+    assert abs(np.linalg.norm(lat["g1"]) - g_px * QPP) / (g_px * QPP) < 0.05
+    assert lat["lattice_frac"] >= 0.6
+    # a collinear pair (off-zone) gives no 2-D basis
+    two = [(c + 12, c, 0.24), (c - 12, c, 0.24)]
+    assert fds.spot_lattice(two, (c, c), QPP) is None
+
+
 def test_cepstral_discreteness_image_crystal_vs_amorphous():
     from tests.synthetic import ring_pattern
     N, qpp, pad = 128, 0.02, 512

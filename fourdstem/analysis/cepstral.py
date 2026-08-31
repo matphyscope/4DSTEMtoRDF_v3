@@ -30,7 +30,7 @@ import numpy as np
 
 __all__ = [
     "ewpc_pattern", "quefrency_per_px", "cepstral_radial_profile",
-    "fluctuation_image", "fluctuation_multiband", "fluctuation_profile", "cepstral_peakiness_image", "cepstral_discreteness_image", "cepstral_lattice_gvectors", "ewpc_mean", "ewpc_profiles",
+    "fluctuation_image", "fluctuation_multiband", "fluctuation_profile", "cepstral_peakiness_image", "cepstral_discreteness_image", "cepstral_lattice_gvectors", "spot_lattice", "ewpc_mean", "ewpc_profiles",
 ]
 
 
@@ -374,6 +374,70 @@ def _ewpc_peaks(cep, dr, r_min, r_max, nsig=4.0, min_sep_px=2, bg_win_px=None,
     return vecs[o], st[o]
 
 
+def _best_lattice_basis(vecs, weights=None, min_angle=15.0, lattice_tol=0.18,
+                        n_basis=8):
+    """Pick the primitive 2-D basis ``(v1, v2)`` of a point set that a lattice best
+    explains. Searches all pairs of the ``n_basis`` shortest points (each Lagrange-
+    reduced) and returns ``(frac, v1, v2)`` maximising the **strength-weighted**
+    fraction of points whose fractional coordinates ``[h,k] = p·V⁻¹`` fall within
+    ``lattice_tol`` of integers. Returns ``None`` if no non-collinear pair. Shared by
+    the cepstral-peak lattice and the diffraction-spot lattice."""
+    vecs = np.asarray(vecs, float)
+    if len(vecs) < 2:
+        return None
+    w = np.ones(len(vecs)) if weights is None else np.asarray(weights, float)
+    w = w / (w.sum() + 1e-12)
+    norms = np.hypot(vecs[:, 0], vecs[:, 1])
+    cand = vecs[np.argsort(norms)][:min(len(vecs), int(n_basis))]
+    best = None
+    for a in range(len(cand)):
+        for b in range(a + 1, len(cand)):
+            v1c, v2c = cand[a], cand[b]
+            cth = float(v1c @ v2c) / (np.linalg.norm(v1c) * np.linalg.norm(v2c) + 1e-12)
+            if np.degrees(np.arccos(np.clip(abs(cth), -1.0, 1.0))) < min_angle:
+                continue
+            r1, r2 = _lagrange_reduce(v1c, v2c)
+            V = np.array([r1, r2])
+            if abs(np.linalg.det(V)) < 1e-9:
+                continue
+            hk = vecs @ np.linalg.inv(V)
+            fit = np.abs(hk - np.round(hk)).max(axis=1) <= lattice_tol
+            frac = float(w[fit].sum())
+            if best is None or frac > best[0]:
+                best = (frac, r1, r2)
+    return best
+
+
+def spot_lattice(spots, center, q_per_px, weights=None, min_angle=15.0,
+                 lattice_tol=0.06, n_basis=8, hk_max=2):
+    """Reciprocal lattice from **diffraction spots** — the direct, beam-robust route.
+
+    The detected Bragg spots ARE the reciprocal lattice, so this skips the cepstral
+    (and its central-beam blob) entirely. Converts ``spots`` ``[(x,y,q),...]`` to
+    g-vectors, finds the primitive reciprocal basis ``g1, g2`` (1/Å) via
+    :func:`_best_lattice_basis` (weighted by ``weights`` if given, e.g. spot
+    intensity), and returns ``(info)`` with ``g1, g2, lattice_frac, gvectors`` and a
+    generated reflection grid ``grid_gs = h·g1 + k·g2`` for indexing/plotting.
+    ``lattice_frac`` (weighted fraction of spots on the 2-D lattice) is 1 for a good
+    zone-axis pattern; a collinear 2-spot pair gives no 2-D basis (``None``) — that
+    is the off-zone case, handled by |q| matching instead. Returns ``None`` if fewer
+    than 2 non-collinear spots."""
+    from .indexing import spots_to_gvectors
+    if len(spots) < 2:
+        return None
+    gv = np.asarray(spots_to_gvectors(spots, center, q_per_px), float)
+    best = _best_lattice_basis(gv, weights=weights, min_angle=min_angle,
+                               lattice_tol=lattice_tol, n_basis=n_basis)
+    if best is None:
+        return None
+    frac, g1, g2 = best
+    grid = np.array([h * g1 + k * g2
+                     for h in range(-hk_max, hk_max + 1)
+                     for k in range(-hk_max, hk_max + 1)
+                     if not (h == 0 and k == 0)])
+    return {"g1": g1, "g2": g2, "lattice_frac": frac, "gvectors": gv, "grid_gs": grid}
+
+
 def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,
                               offset=1.0, window=True, min_prom=0.10, min_angle=15.0,
                               hk_max=2, max_peaks=60, min_lattice_frac=0.5,
@@ -419,28 +483,11 @@ def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,
     if len(vecs) < 2:
         return empty, {"reason": "fewer than 2 peaks", **base_info}
 
-    # Search the basis over the shortest peaks and pick the (v1, v2) whose lattice
-    # explains the most detected peaks — one spurious short peak can't wreck it.
+    # Strength-weighted basis search (shared helper): strong true-lattice peaks
+    # dominate; weak central-blob ripple peaks can't dilute the fraction.
     inv = np.linalg.inv
-    cand = vecs[:min(len(vecs), int(n_basis))]
-    w = st / (st.sum() + 1e-12)                                   # peak-strength weights
-    best = None                                                   # (frac, v1, v2)
-    for a in range(len(cand)):
-        for b in range(a + 1, len(cand)):
-            v1c, v2c = cand[a], cand[b]
-            cth = float(v1c @ v2c) / (np.linalg.norm(v1c) * np.linalg.norm(v2c) + 1e-12)
-            if np.degrees(np.arccos(np.clip(abs(cth), -1.0, 1.0))) < min_angle:
-                continue
-            r1, r2 = _lagrange_reduce(v1c, v2c)
-            V = np.array([r1, r2])
-            if abs(np.linalg.det(V)) < 1e-9:
-                continue
-            hk = vecs @ inv(V)
-            fit = np.abs(hk - np.round(hk)).max(axis=1) <= lattice_tol
-            frac = float(w[fit].sum())                            # strength-weighted:
-            #   strong true-lattice peaks dominate; weak blob-ripple peaks can't dilute
-            if best is None or frac > best[0]:
-                best = (frac, r1, r2)
+    best = _best_lattice_basis(vecs, weights=st, min_angle=min_angle,
+                               lattice_tol=lattice_tol, n_basis=n_basis)
     if best is None:
         return empty, {"reason": "no non-collinear basis", **base_info}
     frac, v1, v2 = best
