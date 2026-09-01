@@ -440,7 +440,7 @@ def spot_lattice(spots, center, q_per_px, weights=None, min_angle=15.0,
 
 def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
                          highpass="auto", n_orders=3, half_width=0.6, step=0.25,
-                         smooth=1.0, tang_min=0.4):
+                         smooth=1.0, tang_min=0.4, require_tangential=True):
     """Translational-periodicity test — the defining crystallinity property.
 
     A crystal has long-range translational order: its cepstral (EWPC) shows an
@@ -481,12 +481,13 @@ def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
 
     score, orders = _periodicity_from_cep(cep, dr, avs, n_orders=n_orders,
                                           half_width=half_width, step=step,
-                                          smooth=smooth, tang_min=tang_min)
+                                          smooth=smooth, tang_min=tang_min,
+                                          require_tangential=require_tangential)
     return {"score": score, "orders": orders, "a_vectors": avs, "dr": dr}
 
 
 def _periodicity_from_cep(cep, dr, avs, n_orders=3, half_width=0.6, step=0.25,
-                          smooth=1.0, tang_min=0.4):
+                          smooth=1.0, tang_min=0.4, require_tangential=True):
     """Translational-periodicity score of a *precomputed* EWPC ``cep`` for the
     real-space lattice vectors ``avs`` (Å). Shared core of
     :func:`cepstral_periodicity` (vector supplied from reciprocal g) and
@@ -543,7 +544,11 @@ def _periodicity_from_cep(cep, dr, avs, n_orders=3, half_width=0.6, step=0.25,
             if ref is None:
                 os.append((0.0, False)); continue
             tnorm = ct / ref                                 # isolated point -> ~1; ring -> ~0 (flat tangentially)
-            os.append((round(tnorm, 2), bool(pr and pt and tnorm >= tang_min)))
+            if require_tangential:
+                ap = bool(pr and pt and tnorm >= tang_min)   # isolated 2-D lattice point
+            else:
+                ap = bool(pr)                                # radial only (1-D / collinear: peaks along the vector only)
+            os.append((round(tnorm, 2), ap))
         orders[i] = os
         if not os[0][1]:                                     # must apply once (isolated 2-D peak)
             rep.append(0.0)
