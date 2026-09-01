@@ -559,28 +559,30 @@ def cepstral_periodicity_map(cube, center=None, q_per_px=None, mask=None,
                              offset=1.0, peak_nsig=4.0, lattice_tol=0.18,
                              min_angle=15.0, n_orders=3,
                              half_width=0.6, tang_min=0.4, two_d=True,
-                             n_jobs=1, progress=False):
-    """Exhaustive per-scan-position translational-periodicity crystallinity map.
+                             scan_bin=1, n_jobs=1, progress=False):
+    """Exhaustive translational-periodicity crystallinity map over the scan.
 
     The *mathematical* crystallinity test of §7c applied to **every** (masked)
-    probe position, independent of any spot picking. For each pattern: the EWPC
-    is formed (central beam high-passed), its strongest cepstral peak is taken
-    as a real-space lattice vector ``a`` (and, if ``two_d``, the strongest
-    non-collinear peak as a second basis vector), and
-    :func:`_periodicity_from_cep` scores whether that vector *repeats* — an
+    scan region, independent of any spot picking. For each NBD: the EWPC is
+    formed (central beam high-passed), a PRIMITIVE lattice basis is read from
+    its cepstral peaks (via :func:`_best_lattice_basis`), and
+    :func:`_periodicity_from_cep` scores whether those vectors *repeat* — an
     isolated (radial **and** tangential) peak at ``2a, 3a`` marks long-range
     translational order (crystal), while an amorphous ring repeats radially but
     is flat tangentially and scores ≈ 0. Positions outside ``mask`` are 0.
 
+    ``scan_bin`` sets the tested unit: with ``scan_bin=1`` every probe position
+    is tested individually, but a *single* probe's NBD is low-dose and the
+    cepstral peaks that build the vector are then SNR-limited (on real data
+    almost every single pixel scores 0). Set ``scan_bin=k`` to average each
+    ``k×k`` block of probe positions into one higher-dose NBD before the test —
+    still exhaustive (every pixel belongs to a block, and the block score is
+    written back to all its pixels) but with ``k²×`` the counts, which is what
+    makes translational periodicity measurable on real amorphous-matrix data.
+
     Returns a scan-shaped map (high = crystalline). Pair with
     :func:`~fourdstem.analysis.indexing.label_grains` → ``grain_patterns`` →
     ``index_pattern`` to name the phase of each grain.
-
-    Note: a *single* probe's NBD is low-dose, so the cepstral peaks that build
-    the vector are SNR-limited — this map is reliable on strong/averaged
-    patterns and borderline on weak single pixels (zero-padding for resolution
-    can also perturb the peak set). For a robust per-region verdict, average
-    within grains and apply :func:`cepstral_periodicity` to the grain mean.
     """
     from .virtual_image import _resolve_center
     from ..utils.parallel import parallel_map
@@ -588,28 +590,47 @@ def cepstral_periodicity_map(cube, center=None, q_per_px=None, mask=None,
     if q_per_px is None:
         q_per_px = cube.calibration.q_per_px
     flat = cube._flat_patterns()
-    N = flat.shape[0]
-    H = int(np.asarray(cube.dp_shape)[0])
+    H, W = flat.shape[1], flat.shape[2]
+    scan = cube.scan_shape
+    k = max(1, int(scan_bin))
+
+    # Build the working patterns (single pixels, or k×k block averages) and the
+    # index map from every scan pixel to its working unit.
+    if k > 1 and scan and len(scan) == 2:
+        Ry, Rx = scan
+        by, bx = Ry // k, Rx // k
+        cut_y, cut_x = by * k, bx * k
+        blk = flat[:Ry * Rx].reshape(Ry, Rx, H, W)[:cut_y, :cut_x]
+        work = blk.reshape(by, k, bx, k, H, W).mean(axis=(1, 3)).reshape(by * bx, H, W)
+        if mask is not None:
+            mm = np.asarray(mask, bool)[:cut_y, :cut_x].reshape(by, k, bx, k).mean(axis=(1, 3)) >= 0.5
+            mwork = mm.ravel()
+        else:
+            mwork = None
+    else:
+        work = flat
+        mwork = None if mask is None else np.asarray(mask, bool).ravel()
+        by = bx = None
+
     hp = highpass
     if hp == "auto":
         hp = max(4, H // 32)
-    dr = quefrency_per_px(ewpc_pattern(flat[0], offset=offset, pad=pad,
+    dr = quefrency_per_px(ewpc_pattern(work[0], offset=offset, pad=pad,
                                        highpass=hp).shape[0], q_per_px)
     bg_win = max(5, int(round(0.5 / dr)))
-    m = None if mask is None else np.asarray(mask, bool).ravel()
 
     def _score(i):
-        if m is not None and not m[i]:
+        if mwork is not None and not mwork[i]:
             return 0.0
         try:
-            cep = ewpc_pattern(flat[i], offset=offset, pad=pad, highpass=hp)
+            cep = ewpc_pattern(work[i], offset=offset, pad=pad, highpass=hp)
             vecs, st = _ewpc_peaks(cep, dr, r_min, r_max, nsig=peak_nsig,
                                    bg_win_px=bg_win)
             if len(vecs) < 2:
                 return 0.0
-            # Build a PRIMITIVE basis from the cepstral peaks (the shortest pair
-            # whose lattice explains the most peaks) — NOT the single strongest
-            # peak, which is often a diagonal (2a-type) vector and fails to repeat.
+            # PRIMITIVE basis from the cepstral peaks (shortest pair explaining
+            # the most peaks) — not the single strongest peak, which is often a
+            # diagonal 2a-type vector that fails to repeat.
             best = _best_lattice_basis(vecs, weights=st, min_angle=min_angle,
                                        lattice_tol=lattice_tol, n_basis=8)
             if best is None:
@@ -623,11 +644,82 @@ def cepstral_periodicity_map(cube, center=None, q_per_px=None, mask=None,
         except Exception:
             return 0.0
 
-    vals = parallel_map(_score, range(N), n_jobs=n_jobs, progress=progress,
-                        desc="periodicity")
-    out = np.asarray(vals, float)
+    vals = np.asarray(parallel_map(_score, range(work.shape[0]), n_jobs=n_jobs,
+                                   progress=progress, desc="periodicity"), float)
+    if k > 1 and scan and len(scan) == 2:
+        out = np.zeros(scan, float)
+        up = np.repeat(np.repeat(vals.reshape(by, bx), k, 0), k, 1)  # block -> pixels
+        out[:by * k, :bx * k] = up
+        return out
+    return vals.reshape(scan) if scan else vals
+
+
+def cepstral_angular_map(cube, center=None, q_per_px=None, mask=None,
+                         r_min=1.0, r_max=6.0, highpass="auto", offset=1.0,
+                         ring_hw=1.5, n_jobs=1, progress=False):
+    """Exhaustive per-pixel cepstral crystallinity LOCATOR (angular concentration).
+
+    The crystallinity test of §7c made *robust per single low-dose probe* so it
+    can locate crystalline regions over the whole scan. Same physics as the
+    translational-periodicity test — a crystal's EWPC is discrete **points**, an
+    amorphous phase's EWPC is a **ring** — but read *around* the dominant
+    quefrency shell instead of stepping out to ``2a, 3a``. For each NBD: form the
+    EWPC (central beam high-passed, **no zero-padding needed**), find the
+    strongest shell radius ``r*`` in the band ``[r_min, r_max]`` Å from the radial
+    cepstrum, and score the azimuthal concentration on the annulus ``r* ± ring_hw``
+    as ``(max − median) / MAD``. A few discrete lattice points give a high value;
+    a full ring is azimuthally flat and scores low. Because it is a robust ratio
+    (not a fragile 2-D peak test) and needs no padding, it works where the
+    per-pixel :func:`cepstral_periodicity_map` collapses to ~0 on real low-dose
+    data. Use it to *locate* grains, then confirm and index them with
+    :func:`cepstral_periodicity` on the grain-mean NBD (where the dose is enough
+    for the rigorous 2a/3a repeat). Positions outside ``mask`` are 0.
+
+    Returns a scan-shaped map (high = crystalline / spotty cepstrum).
+    """
+    from .virtual_image import _resolve_center
+    from ..utils.parallel import parallel_map
+    center = _resolve_center(cube, center)
+    if q_per_px is None:
+        q_per_px = cube.calibration.q_per_px
+    flat = cube._flat_patterns()
+    N = flat.shape[0]
+    H, W = flat.shape[1], flat.shape[2]
+    hp = highpass
+    if hp == "auto":
+        hp = max(4, H // 32)
+    n0 = ewpc_pattern(flat[0], offset=offset, highpass=hp).shape[0]
+    cc = n0 // 2
+    dr = quefrency_per_px(n0, q_per_px)
+    yy, xx = np.mgrid[0:n0, 0:n0]
+    rad = np.hypot(xx - cc, yy - cc)
+    m = None if mask is None else np.asarray(mask, bool).ravel()
+
+    def _score(i):
+        if m is not None and not m[i]:
+            return 0.0
+        try:
+            cep = ewpc_pattern(flat[i], offset=offset, highpass=hp)
+            r, prof = cepstral_radial_profile(cep, q_per_px, r_min=r_min)
+            band = (r >= r_min) & (r <= r_max)
+            if band.sum() < 2 or prof[band].max() <= 0:
+                return 0.0
+            rstar = r[band][int(np.argmax(prof[band]))]
+            rp = rstar / dr
+            ann = (rad >= rp - ring_hw) & (rad <= rp + ring_hw)
+            v = cep[ann]
+            if v.size < 8:
+                return 0.0
+            med = float(np.median(v))
+            mad = 1.4826 * float(np.median(np.abs(v - med))) + 1e-9
+            return float((float(v.max()) - med) / mad)
+        except Exception:
+            return 0.0
+
+    vals = np.asarray(parallel_map(_score, range(N), n_jobs=n_jobs,
+                                   progress=progress, desc="cepstral angular"), float)
     scan = cube.scan_shape
-    return out.reshape(scan) if scan else out
+    return vals.reshape(scan) if scan else vals
 
 
 def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,

@@ -1415,6 +1415,46 @@ def test_cepstral_periodicity_map_localizes_crystalline_grain():
     assert loc[:, 1].max() < Rx // 3 and loc[:, 0].max() < 6
 
 
+def test_cepstral_angular_map_locates_crystalline_at_low_dose():
+    # the robust per-pixel cepstral LOCATOR: angular concentration at the dominant
+    # cepstral shell separates a (noisy, weak) crystalline grain from amorphous
+    # rings per single pixel, where the per-pixel 2a/3a periodicity map collapses.
+    N, QPP = 100, 0.02
+    Ry, Rx = 10, 12
+    c = N // 2
+    yy, xx = np.mgrid[0:N, 0:N]
+    r = np.hypot(xx - c, yy - c)
+    beam = 6000 * np.exp(-(r / 4) ** 2)
+    rng = np.random.default_rng(0)
+    cube = np.zeros((Ry, Rx, N, N), float)
+    for iy in range(Ry):
+        for ix in range(Rx):
+            im = beam.copy()
+            if ix < Rx // 3 and 3 <= iy < 8:                 # weak crystalline grain
+                for h in range(-2, 3):
+                    for k in range(-2, 3):
+                        if h == 0 and k == 0:
+                            continue
+                        x, y = c + h * 24, c + k * 24
+                        im += 60 * 0.6 ** (abs(h) + abs(k) - 1) * \
+                            np.exp(-(((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.4 ** 2)))
+            else:
+                im += 120 * np.exp(-((r - 24) / 2.0) ** 2)   # amorphous ring
+            cube[iy, ix] = np.clip(im + 5 + 6 * rng.standard_normal((N, N)), 0, None)
+    dc = fds.from_array(cube, q_per_px=QPP)
+    loc = fds.cepstral_angular_map(dc, center=(c, c), q_per_px=QPP, r_min=1.0,
+                                   r_max=6.0, n_jobs=1)
+    assert loc.shape == (Ry, Rx)
+    crystal = loc[3:8, :Rx // 3].mean()
+    amorph = loc[:, Rx // 3:].mean()
+    assert crystal > 1.8 * amorph                            # grain clearly separated
+    labels, ng = fds.label_grains(loc, threshold_pctl=90, min_size=4)
+    assert ng >= 1
+    sizes = [(labels == g).sum() for g in range(1, ng + 1)]
+    loc_big = np.argwhere(labels == int(np.argmax(sizes)) + 1)
+    assert loc_big[:, 1].max() < Rx // 3 + 1                 # grain in the crystalline columns
+
+
 def test_azimuthal_discreteness_spots_vs_ring():
     # discrete Bragg spots vs a continuous ring at the SAME radius: |q| can't tell
     # them apart, but the angular discreteness does (crystalline high, amorphous low)
