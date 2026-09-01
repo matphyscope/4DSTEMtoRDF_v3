@@ -1415,6 +1415,42 @@ def test_cepstral_periodicity_map_localizes_crystalline_grain():
     assert loc[:, 1].max() < Rx // 3 and loc[:, 0].max() < 6
 
 
+def test_cepstral_spot_periodicity_map_exact_chain_per_pixel():
+    # the user's exact §7c chain applied per pixel: log(NBD) -> Bragg spots ->
+    # reciprocal lattice -> real lattice -> cepstral 2a/3a line-profile test.
+    # With pad=None (native dr) and a low log-spot threshold it fires densely on
+    # a crystalline block and stays 0 on amorphous rings.
+    N, QPP = 128, 0.02
+    Ry, Rx = 6, 12
+    c = N // 2
+    yy, xx = np.mgrid[0:N, 0:N]
+    r = np.hypot(xx - c, yy - c)
+    beam = 6000 * np.exp(-(r / 4) ** 2)
+    rng = np.random.default_rng(0)
+    cube = np.zeros((Ry, Rx, N, N), float)
+    for iy in range(Ry):
+        for ix in range(Rx):
+            im = beam.copy()
+            if ix < Rx // 3 and 1 <= iy < 5:                 # crystalline block
+                for h in range(-2, 3):
+                    for k in range(-2, 3):
+                        if h == 0 and k == 0:
+                            continue
+                        x, y = c + h * 24, c + k * 24
+                        im += 100 * 0.6 ** (abs(h) + abs(k) - 1) * \
+                            np.exp(-(((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.4 ** 2)))
+            else:
+                im += 120 * np.exp(-((r - 24) / 2.0) ** 2)
+            cube[iy, ix] = np.clip(im + 5 + 4 * rng.standard_normal((N, N)), 0, None)
+    dc = fds.from_array(cube, q_per_px=QPP)
+    cm = fds.cepstral_spot_periodicity_map(dc, center=(c, c), q_per_px=QPP,
+                                           q_beam=0.2, q_max=1.15, n_mad=3.0,
+                                           keep=6, pad=None, highpass=4, n_jobs=1)
+    assert cm.shape == (Ry, Rx)
+    assert (cm[1:5, :Rx // 3] >= 0.5).mean() > 0.7           # crystal block fires
+    assert (cm[:, Rx // 3:] >= 0.5).sum() == 0               # amorphous stays 0
+
+
 def test_cepstral_angular_map_locates_crystalline_at_low_dose():
     # the robust per-pixel cepstral LOCATOR: angular concentration at the dominant
     # cepstral shell separates a (noisy, weak) crystalline grain from amorphous

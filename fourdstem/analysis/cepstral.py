@@ -722,6 +722,85 @@ def cepstral_angular_map(cube, center=None, q_per_px=None, mask=None,
     return vals.reshape(scan) if scan else vals
 
 
+def cepstral_spot_periodicity_map(cube, center=None, q_per_px=None, mask=None,
+                                  q_beam=0.20, q_max=1.15, tophat=11, n_mad=4.5,
+                                  keep=6, log_spot=True, log_off=1.0,
+                                  lattice_tol=0.06, hk_max=2, min_angle=15.0,
+                                  pad=None, highpass="auto", n_orders=3,
+                                  half_width=0.6, tang_min=0.4, n_jobs=1,
+                                  progress=False):
+    """Exhaustive per-pixel run of the full §7c spot→vector→periodicity chain.
+
+    For **every** (masked) probe position, exactly the region-level recipe:
+      1. detect Bragg spots on ``log(NBD)`` (log lifts weak high-order spots and
+         flattens the amorphous ring), keep the strongest ``keep``;
+      2. build the reciprocal lattice ``g1, g2`` from those spots
+         (:func:`spot_lattice`), i.e. the reciprocal→real vectors;
+      3. run :func:`cepstral_periodicity` — convert to the real lattice, and
+         verify the vector *repeats* at ``2a, 3a`` by the line-profile test
+         (1st derivative ≈ 0 AND 2nd derivative < 0, radial and tangential).
+    Collinear spots fall back to the 1-D single-vector periodicity. Returns the
+    per-pixel periodicity-score map.
+
+    This is the user's exact method applied exhaustively. **Expect it to be
+    sparse on real data**: a single probe is low-dose and rarely shows the ≥2
+    spots step 1 needs, so most pixels score 0 — the physical SNR limit, not a
+    bug. For a dense verdict, average within grains and apply the same chain to
+    the grain mean (see :func:`cepstral_angular_map` for a robust locator).
+    """
+    from .virtual_image import _resolve_center
+    from ..utils.parallel import parallel_map
+    from .phases import detect_spots
+    from .indexing import spots_to_gvectors
+    center = _resolve_center(cube, center)
+    if q_per_px is None:
+        q_per_px = cube.calibration.q_per_px
+    flat = cube._flat_patterns()
+    N = flat.shape[0]
+    H, W = flat.shape[1], flat.shape[2]
+    cen = (float(center[0]), float(center[1]))
+    m = None if mask is None else np.asarray(mask, bool).ravel()
+
+    def _val(nbd, s):
+        return float(nbd[int(np.clip(s[1], 0, H - 1)), int(np.clip(s[0], 0, W - 1))])
+
+    def _score(i):
+        if m is not None and not m[i]:
+            return 0.0
+        try:
+            nbd = np.asarray(flat[i], float)
+            det = np.log(np.clip(nbd, 0, None) + log_off) if log_spot else nbd
+            sp = detect_spots(det, cen, q_per_px, q_beam=q_beam, q_max=q_max,
+                              n_mad=n_mad, min_dist=3, tophat=tophat)
+            if len(sp) < 2:
+                return 0.0
+            sp = [s for _, s in sorted(((_val(det, s), s) for s in sp),
+                                       key=lambda t: -t[0])[:keep]]
+            wt = [_val(nbd, s) for s in sp]
+            lat = spot_lattice(sp, cen, q_per_px, weights=wt,
+                               lattice_tol=lattice_tol, hk_max=hk_max,
+                               min_angle=min_angle)
+            if lat is not None:
+                per = cepstral_periodicity(nbd, lat["g1"], lat["g2"], q_per_px,
+                                           pad=pad, highpass=highpass,
+                                           n_orders=n_orders, half_width=half_width,
+                                           tang_min=tang_min)
+            else:                                    # collinear -> 1-D periodicity
+                gv = spots_to_gvectors(sp, cen, q_per_px)
+                gs = gv[int(np.argmax(wt))]
+                per = cepstral_periodicity(nbd, gs, None, q_per_px, pad=pad,
+                                           highpass=highpass, n_orders=n_orders,
+                                           half_width=half_width, tang_min=tang_min)
+            return float(per["score"])
+        except Exception:
+            return 0.0
+
+    vals = np.asarray(parallel_map(_score, range(N), n_jobs=n_jobs,
+                                   progress=progress, desc="spot-periodicity"), float)
+    scan = cube.scan_shape
+    return vals.reshape(scan) if scan else vals
+
+
 def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,
                               offset=1.0, window=True, min_prom=0.10, min_angle=15.0,
                               hk_max=2, max_peaks=60, min_lattice_frac=0.5,
