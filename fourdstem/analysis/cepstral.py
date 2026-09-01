@@ -445,7 +445,8 @@ def spot_lattice(spots, center, q_per_px, weights=None, min_angle=15.0,
 
 def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
                          highpass="auto", n_orders=3, half_width=0.6, step=0.25,
-                         smooth=1.0, tang_min=0.4, require_tangential=True):
+                         smooth=1.0, tang_min=0.4, require_tangential=True,
+                         snap_win=0.0):
     """Translational-periodicity test — the defining crystallinity property.
 
     A crystal has long-range translational order: its cepstral (EWPC) shows an
@@ -487,12 +488,14 @@ def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
     score, orders = _periodicity_from_cep(cep, dr, avs, n_orders=n_orders,
                                           half_width=half_width, step=step,
                                           smooth=smooth, tang_min=tang_min,
-                                          require_tangential=require_tangential)
+                                          require_tangential=require_tangential,
+                                          snap_win=snap_win)
     return {"score": score, "orders": orders, "a_vectors": avs, "dr": dr}
 
 
 def _periodicity_from_cep(cep, dr, avs, n_orders=3, half_width=0.6, step=0.25,
-                          smooth=1.0, tang_min=0.4, require_tangential=True):
+                          smooth=1.0, tang_min=0.4, require_tangential=True,
+                          snap_win=0.0):
     """Translational-periodicity score of a *precomputed* EWPC ``cep`` for the
     real-space lattice vectors ``avs`` (Å). Shared core of
     :func:`cepstral_periodicity` (vector supplied from reciprocal g) and
@@ -532,6 +535,24 @@ def _periodicity_from_cep(cep, dr, avs, n_orders=3, half_width=0.6, step=0.25,
         stationary = abs(d1 / d2) <= tol                     # peak vertex within tol of the point
         return bool(stationary), -d2                          # curvature magnitude (concavity)
 
+    def snap(origin_px, dir_hat):
+        # "if NEAR a peak, take it": snap the predicted point to the nearest
+        # cepstral local maximum within +/- snap_win (A) along dir_hat. Tolerates
+        # vector/calibration error so a peak slightly off the prediction is not lost.
+        if snap_win <= 0:
+            return origin_px
+        ts = np.arange(-snap_win, snap_win + 1e-9, step * dr)
+        xs = origin_px[0] + ts / dr * dir_hat[0]
+        ys = origin_px[1] + ts / dr * dir_hat[1]
+        if xs.min() < 1 or xs.max() > n - 2 or ys.min() < 1 or ys.max() > n - 2:
+            return origin_px
+        p = gaussian_filter1d(map_coordinates(cep, [ys, xs], order=1), smooth)
+        lm = [k for k in range(1, len(p) - 1) if p[k] >= p[k - 1] and p[k] >= p[k + 1]]
+        if not lm:
+            return origin_px
+        k = lm[int(np.argmin([abs(ts[j]) for j in lm]))]     # nearest local max to prediction
+        return (origin_px[0] + ts[k] / dr * dir_hat[0], origin_px[1] + ts[k] / dr * dir_hat[1])
+
     peak_tol = 0.5 * half_width                               # vertex must be within ~half the window
     orders = {}
     rep = []
@@ -539,11 +560,11 @@ def _periodicity_from_cep(cep, dr, avs, n_orders=3, half_width=0.6, step=0.25,
         L = float(np.hypot(*a))
         ah = a / L
         tg = np.array([-ah[1], ah[0]])                       # perpendicular (tangential)
-        _, ref = is_peak(deriv((cc + a[0] / dr, cc + a[1] / dr), ah), peak_tol)  # 1st-order radial curvature
+        _, ref = is_peak(deriv(snap((cc + a[0] / dr, cc + a[1] / dr), ah), ah), peak_tol)  # 1st-order radial curvature
         ref = ref if ref > 0 else None
         os = []
         for ns in range(1, int(n_orders) + 1):
-            o = (cc + ns * a[0] / dr, cc + ns * a[1] / dr)
+            o = snap((cc + ns * a[0] / dr, cc + ns * a[1] / dr), ah)   # snap to nearby cepstral peak
             pr, cr = is_peak(deriv(o, ah), peak_tol)         # radial:  1st deriv 0, 2nd deriv < 0
             pt, ct = is_peak(deriv(o, tg), peak_tol)         # tangential: 1st deriv 0, 2nd deriv < 0
             if ref is None:
