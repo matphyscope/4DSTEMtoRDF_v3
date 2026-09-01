@@ -1373,6 +1373,48 @@ def test_cepstral_periodicity_repeats_for_crystal_only():
         assert score(ring) < 0.5
 
 
+def test_cepstral_periodicity_map_localizes_crystalline_grain():
+    # exhaustive per-pixel periodicity map: a crystalline grain block (square
+    # lattice spots) reads high, amorphous ring reads ~0, and grain labelling
+    # localizes the grain to the crystalline region.
+    N, QPP = 128, 0.02
+    Ry, Rx = 8, 10
+    c = N // 2
+    yy, xx = np.mgrid[0:N, 0:N]
+    r = np.hypot(xx - c, yy - c)
+    beam = 6000 * np.exp(-(r / 4) ** 2)
+    rng = np.random.default_rng(0)
+    cube = np.zeros((Ry, Rx, N, N), float)
+    for iy in range(Ry):
+        for ix in range(Rx):
+            im = beam.copy()
+            if ix < Rx // 3 and 1 <= iy < 6:                 # crystalline grain
+                for h in range(-2, 3):
+                    for k in range(-2, 3):
+                        if h == 0 and k == 0:
+                            continue
+                        x, y = c + h * 24, c + k * 24
+                        im += 85 * 0.6 ** (abs(h) + abs(k) - 1) * \
+                            np.exp(-(((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.4 ** 2)))
+            else:
+                im += 120 * np.exp(-((r - 24) / 2.0) ** 2)   # amorphous ring
+            cube[iy, ix] = np.clip(im + 5 + 4 * rng.standard_normal((N, N)), 0, None)
+    dc = fds.from_array(cube, q_per_px=QPP)
+    pad = int(2 * round(0.5 / (0.10 * QPP)))
+    cm = fds.cepstral_periodicity_map(dc, center=(c, c), q_per_px=QPP, pad=pad,
+                                      peak_nsig=4.0, lattice_tol=0.06, n_jobs=1)
+    assert cm.shape == (Ry, Rx)
+    assert cm[1:6, :Rx // 3].mean() > 0.3                    # crystal block lights up
+    assert cm[:, Rx // 3:].mean() < 0.05                     # amorphous stays ~0
+    labels, ng = fds.label_grains(cm, threshold_pctl=85, min_size=4)
+    assert ng >= 1
+    # the largest grain sits in the crystalline block
+    sizes = [(labels == g).sum() for g in range(1, ng + 1)]
+    big = int(np.argmax(sizes)) + 1
+    loc = np.argwhere(labels == big)
+    assert loc[:, 1].max() < Rx // 3 and loc[:, 0].max() < 6
+
+
 def test_azimuthal_discreteness_spots_vs_ring():
     # discrete Bragg spots vs a continuous ring at the SAME radius: |q| can't tell
     # them apart, but the angular discreteness does (crystalline high, amorphous low)
