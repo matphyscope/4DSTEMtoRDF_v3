@@ -466,14 +466,11 @@ def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
     amorphous ⇒ ≈ 0. Returns ``{score, orders, a_vectors, dr}`` where ``orders[i]``
     lists ``(tang_norm, applies)`` for ``n = 1…n_orders``.
     """
-    from scipy.ndimage import map_coordinates, gaussian_filter1d
     hp = highpass
     if hp == "auto":
         hp = max(4, int(np.asarray(pattern).shape[0]) // 32)
     cep = ewpc_pattern(pattern, pad=pad, highpass=hp)
-    n = cep.shape[0]
-    cc = n // 2
-    dr = quefrency_per_px(n, q_per_px)
+    dr = quefrency_per_px(cep.shape[0], q_per_px)
 
     g1 = np.asarray(g1, float)
     if g2 is not None:
@@ -481,6 +478,29 @@ def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
         avs = [np.linalg.inv(G).T[0], np.linalg.inv(G).T[1]]  # a_i·g_j = δ_ij
     else:
         avs = [g1 / (g1 @ g1)]                                # 1-D: |a| = 1/|g|
+
+    score, orders = _periodicity_from_cep(cep, dr, avs, n_orders=n_orders,
+                                          half_width=half_width, step=step,
+                                          smooth=smooth, tang_min=tang_min)
+    return {"score": score, "orders": orders, "a_vectors": avs, "dr": dr}
+
+
+def _periodicity_from_cep(cep, dr, avs, n_orders=3, half_width=0.6, step=0.25,
+                          smooth=1.0, tang_min=0.4):
+    """Translational-periodicity score of a *precomputed* EWPC ``cep`` for the
+    real-space lattice vectors ``avs`` (Å). Shared core of
+    :func:`cepstral_periodicity` (vector supplied from reciprocal g) and
+    :func:`cepstral_periodicity_map` (vector read off the cepstral peaks). Each
+    predicted point ``n·a_i`` is verified from line profiles: a genuine lattice
+    peak is stationary (1st deriv ≈ 0) AND concave (2nd deriv < 0) BOTH radially
+    (along a) and tangentially (perpendicular). An amorphous ring is concave
+    radially but flat tangentially, so the tangential curvature — normalised by
+    the 1st-order radial curvature — separates a lattice *point* from a *ring*.
+    Returns ``(score, orders)``; ``score`` is the min repeat strength over the
+    basis vectors (0 if any fails to repeat)."""
+    from scipy.ndimage import map_coordinates, gaussian_filter1d
+    n = cep.shape[0]
+    cc = n // 2
 
     def deriv(origin_px, dir_hat):
         # 1st and 2nd derivative of the line profile at origin along dir_hat.
@@ -531,7 +551,83 @@ def cepstral_periodicity(pattern, g1, g2=None, q_per_px=None, pad=None,
         higher = [o[0] for o in os[1:] if o[1]]              # repeats at 2nd OR 3rd
         rep.append(max(higher) if higher else 0.0)
     score = float(min(rep)) if rep else 0.0
-    return {"score": score, "orders": orders, "a_vectors": avs, "dr": dr}
+    return score, orders
+
+
+def cepstral_periodicity_map(cube, center=None, q_per_px=None, mask=None,
+                             r_min=1.0, r_max=8.0, highpass="auto", pad=None,
+                             offset=1.0, peak_nsig=4.0, lattice_tol=0.18,
+                             min_angle=15.0, n_orders=3,
+                             half_width=0.6, tang_min=0.4, two_d=True,
+                             n_jobs=1, progress=False):
+    """Exhaustive per-scan-position translational-periodicity crystallinity map.
+
+    The *mathematical* crystallinity test of §7c applied to **every** (masked)
+    probe position, independent of any spot picking. For each pattern: the EWPC
+    is formed (central beam high-passed), its strongest cepstral peak is taken
+    as a real-space lattice vector ``a`` (and, if ``two_d``, the strongest
+    non-collinear peak as a second basis vector), and
+    :func:`_periodicity_from_cep` scores whether that vector *repeats* — an
+    isolated (radial **and** tangential) peak at ``2a, 3a`` marks long-range
+    translational order (crystal), while an amorphous ring repeats radially but
+    is flat tangentially and scores ≈ 0. Positions outside ``mask`` are 0.
+
+    Returns a scan-shaped map (high = crystalline). Pair with
+    :func:`~fourdstem.analysis.indexing.label_grains` → ``grain_patterns`` →
+    ``index_pattern`` to name the phase of each grain.
+
+    Note: a *single* probe's NBD is low-dose, so the cepstral peaks that build
+    the vector are SNR-limited — this map is reliable on strong/averaged
+    patterns and borderline on weak single pixels (zero-padding for resolution
+    can also perturb the peak set). For a robust per-region verdict, average
+    within grains and apply :func:`cepstral_periodicity` to the grain mean.
+    """
+    from .virtual_image import _resolve_center
+    from ..utils.parallel import parallel_map
+    center = _resolve_center(cube, center)
+    if q_per_px is None:
+        q_per_px = cube.calibration.q_per_px
+    flat = cube._flat_patterns()
+    N = flat.shape[0]
+    H = int(np.asarray(cube.dp_shape)[0])
+    hp = highpass
+    if hp == "auto":
+        hp = max(4, H // 32)
+    dr = quefrency_per_px(ewpc_pattern(flat[0], offset=offset, pad=pad,
+                                       highpass=hp).shape[0], q_per_px)
+    bg_win = max(5, int(round(0.5 / dr)))
+    m = None if mask is None else np.asarray(mask, bool).ravel()
+
+    def _score(i):
+        if m is not None and not m[i]:
+            return 0.0
+        try:
+            cep = ewpc_pattern(flat[i], offset=offset, pad=pad, highpass=hp)
+            vecs, st = _ewpc_peaks(cep, dr, r_min, r_max, nsig=peak_nsig,
+                                   bg_win_px=bg_win)
+            if len(vecs) < 2:
+                return 0.0
+            # Build a PRIMITIVE basis from the cepstral peaks (the shortest pair
+            # whose lattice explains the most peaks) — NOT the single strongest
+            # peak, which is often a diagonal (2a-type) vector and fails to repeat.
+            best = _best_lattice_basis(vecs, weights=st, min_angle=min_angle,
+                                       lattice_tol=lattice_tol, n_basis=8)
+            if best is None:
+                return 0.0
+            _frac, v1, v2 = best
+            avs = [np.asarray(v1, float), np.asarray(v2, float)] if two_d \
+                else [np.asarray(v1, float)]
+            score, _ = _periodicity_from_cep(cep, dr, avs, n_orders=n_orders,
+                                             half_width=half_width, tang_min=tang_min)
+            return float(score)
+        except Exception:
+            return 0.0
+
+    vals = parallel_map(_score, range(N), n_jobs=n_jobs, progress=progress,
+                        desc="periodicity")
+    out = np.asarray(vals, float)
+    scan = cube.scan_shape
+    return out.reshape(scan) if scan else out
 
 
 def cepstral_lattice_gvectors(pattern, q_per_px, r_min=1.0, r_max=6.0, pad=None,
