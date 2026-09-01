@@ -375,13 +375,18 @@ def _ewpc_peaks(cep, dr, r_min, r_max, nsig=4.0, min_sep_px=2, bg_win_px=None,
 
 
 def _best_lattice_basis(vecs, weights=None, min_angle=15.0, lattice_tol=0.18,
-                        n_basis=8):
+                        n_basis=8, reduce=True):
     """Pick the primitive 2-D basis ``(v1, v2)`` of a point set that a lattice best
     explains. Searches all pairs of the ``n_basis`` shortest points (each Lagrange-
     reduced) and returns ``(frac, v1, v2)`` maximising the **strength-weighted**
     fraction of points whose fractional coordinates ``[h,k] = p·V⁻¹`` fall within
     ``lattice_tol`` of integers. Returns ``None`` if no non-collinear pair. Shared by
-    the cepstral-peak lattice and the diffraction-spot lattice."""
+    the cepstral-peak lattice and the diffraction-spot lattice.
+
+    With ``reduce=False`` the basis is kept as the two actual (shortest) input
+    points rather than their Lagrange-reduced combination — so the returned
+    vectors land exactly on detected spots (the reduced basis can be a shorter
+    lattice vector that is not itself a detected point)."""
     vecs = np.asarray(vecs, float)
     if len(vecs) < 2:
         return None
@@ -396,7 +401,7 @@ def _best_lattice_basis(vecs, weights=None, min_angle=15.0, lattice_tol=0.18,
             cth = float(v1c @ v2c) / (np.linalg.norm(v1c) * np.linalg.norm(v2c) + 1e-12)
             if np.degrees(np.arccos(np.clip(abs(cth), -1.0, 1.0))) < min_angle:
                 continue
-            r1, r2 = _lagrange_reduce(v1c, v2c)
+            r1, r2 = _lagrange_reduce(v1c, v2c) if reduce else (v1c, v2c)
             V = np.array([r1, r2])
             if abs(np.linalg.det(V)) < 1e-9:
                 continue
@@ -409,7 +414,7 @@ def _best_lattice_basis(vecs, weights=None, min_angle=15.0, lattice_tol=0.18,
 
 
 def spot_lattice(spots, center, q_per_px, weights=None, min_angle=15.0,
-                 lattice_tol=0.06, n_basis=8, hk_max=2):
+                 lattice_tol=0.06, n_basis=8, hk_max=2, reduce=True):
     """Reciprocal lattice from **diffraction spots** — the direct, beam-robust route.
 
     The detected Bragg spots ARE the reciprocal lattice, so this skips the cepstral
@@ -427,7 +432,7 @@ def spot_lattice(spots, center, q_per_px, weights=None, min_angle=15.0,
         return None
     gv = np.asarray(spots_to_gvectors(spots, center, q_per_px), float)
     best = _best_lattice_basis(gv, weights=weights, min_angle=min_angle,
-                               lattice_tol=lattice_tol, n_basis=n_basis)
+                               lattice_tol=lattice_tol, n_basis=n_basis, reduce=reduce)
     if best is None:
         return None
     frac, g1, g2 = best
